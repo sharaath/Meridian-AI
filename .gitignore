@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+
+# Expo / React Native
+.expo/
+dist/
+web-build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+android/
+ios/
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+.dev_secret
+*.db
+*.sqlite
+*.sqlite3
+backend/storage/
+backend/uploads/
+
+# Logs & OS
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
+Thumbs.db
+.pytest_cache/
+.coverage
+htmlcov/
+

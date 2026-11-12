@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "Meridian AI",
+    "slug": "meridian-ai",
+    "version": "1.0.0",
+    "orientation": "default",
+    "scheme": "meridian",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.meridianai.assistant"
+    },
+    "android": {
+      "package": "com.meridianai.assistant",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0D9488"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "name": "Meridian AI",
+      "shortName": "Meridian",
+      "themeColor": "#0D9488",
+      "backgroundColor": "#FAF9F6"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow Meridian AI to record your voice for speech-to-text prompts."
+        }
+      ],
+      "expo-asset",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
