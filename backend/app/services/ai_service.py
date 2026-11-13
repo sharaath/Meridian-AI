@@ -233,7 +233,7 @@ class GeminiProvider(BaseAIProvider):
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
         contents = self._build_contents(messages)
         gen_config = types.GenerateContentConfig(
             system_instruction=config.system_instruction or None,
@@ -280,7 +280,7 @@ class GeminiProvider(BaseAIProvider):
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
         response = await client.aio.models.generate_content(
             model=model_id or "gemini-2.5-flash",
             contents=[
