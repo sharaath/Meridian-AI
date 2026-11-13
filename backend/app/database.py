@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -41,10 +41,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db() -> None:
-    """Create tables when running against local SQLite or uninitialized databases."""
+    """Create tables and ensure schema constraints support both Supabase and direct auth."""
     from app.models import tables  # noqa: F401
     try:
         Base.metadata.create_all(bind=engine)
+        if get_settings().is_postgres:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_id_fkey;"))
     except Exception as exc:
         import logging
         logging.getLogger("uvicorn.error").warning("Database table verification deferred: %s", exc)

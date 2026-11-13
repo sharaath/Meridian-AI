@@ -7,6 +7,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -109,11 +110,29 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
         email_verified=False,
         verification_token=verification_token,
     )
-    db.add(user)
-    db.flush()
-    db.add(UserPreference(user_id=user.id))
-    db.commit()
-    db.refresh(user)
+    try:
+        db.add(user)
+        db.flush()
+        db.add(UserPreference(user_id=user.id))
+        db.commit()
+        db.refresh(user)
+    except Exception as exc:
+        db.rollback()
+        # If foreign key constraint failed on un-migrated database, attempt drop and retry once
+        if "users_id_fkey" in str(exc) or "foreign key constraint" in str(exc).lower():
+            try:
+                db.execute(text("ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_id_fkey;"))
+                db.commit()
+                db.add(user)
+                db.flush()
+                db.add(UserPreference(user_id=user.id))
+                db.commit()
+                db.refresh(user)
+            except Exception as retry_exc:
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"Database user creation failed: {retry_exc}")
+        else:
+            raise HTTPException(status_code=500, detail=f"Account creation failed: {exc}")
 
     token = _issue_local_token(user)
     return AuthResponse(
