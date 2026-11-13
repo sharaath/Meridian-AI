@@ -55,6 +55,15 @@ def create_app() -> FastAPI:
     app.include_router(user.router)
     app.include_router(admin.router)
 
+    @app.get("/", tags=["System"])
+    def root():
+        return {
+            "status": "ok",
+            "message": "Meridian AI API is running.",
+            "health": "/api/health",
+            "docs": "/docs",
+        }
+
     @app.get("/api/health", tags=["System"])
     def health():
         return {
