@@ -52,7 +52,9 @@ class Settings:
         default_sqlite_path = (BASE_DIR / "meridian_dev.db").as_posix()
         raw_db_url = os.getenv("DATABASE_URL", "").strip()
         if raw_db_url.startswith("postgres://"):
-            raw_db_url = "postgresql://" + raw_db_url[len("postgres://"):]
+            raw_db_url = "postgresql+psycopg2://" + raw_db_url[len("postgres://"):]
+        elif raw_db_url.startswith("postgresql://") and not raw_db_url.startswith("postgresql+"):
+            raw_db_url = "postgresql+psycopg2://" + raw_db_url[len("postgresql://"):]
         self.database_url: str = raw_db_url or f"sqlite:///{default_sqlite_path}"
 
         # Supabase
