@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS public.messages (
     attachments_json JSONB DEFAULT '[]'::jsonb,
     token_count INTEGER NOT NULL DEFAULT 0,
     is_edited BOOLEAN NOT NULL DEFAULT FALSE,
+    parent_id UUID REFERENCES public.messages(id) ON DELETE SET NULL,
+    feedback TEXT DEFAULT NULL CHECK (feedback IN ('thumbs_up', 'thumbs_down', NULL)),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

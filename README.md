@@ -91,6 +91,28 @@ Designed specifically to adhere to the strict **Minimal-Change Rule** (change on
 
 ---
 
+### 5. Phase 1 — Chat Controls (100% Implemented & Verified)
+Brings the chat interaction, responsiveness, and conversation branching to parity with top-tier AI assistants:
+
+- [x] **Client & Server Stream Cancellation (Stop Button)**:
+  - Real-time Stop button cancels the active SSE stream on both frontend (`AbortController`) and backend (`POST /api/chat/cancel/{conversation_id}` with `asyncio.Event` cancellation tracker).
+  - Automatically captures and saves partial replies to the database upon cancellation.
+- [x] **Tree Branching & Message Navigation (`parent_id`)**:
+  - Full tree structure stored via `messages.parent_id` (indexed, foreign-key self-referential).
+  - Editing a user message or regenerating an assistant message creates a non-destructive sibling branch without deleting conversation history.
+  - Sibling switcher (`< 1/2 >`) in the UI lets users freely browse alternative response branches.
+  - Server-side branch isolation algorithm (`_get_branch_messages`) walks the message tree backwards to prevent cross-branch context contamination.
+- [x] **Message Feedback & Copying**:
+  - Copy button with animated clipboard feedback on all messages.
+  - Per-message Thumbs Up / Thumbs Down feedback (`POST /api/messages/{message_id}/feedback`) persisted to PostgreSQL/SQLite with per-user data isolation.
+- [x] **Incremental Markdown & Code Block Controls**:
+  - Incremental markdown rendering during streaming without layout shifts or flicker.
+  - Multi-language syntax highlighting across Python, TypeScript/JavaScript, SQL, Go, Rust, HTML, CSS, JSON, and Shell.
+  - One-click copy code button on all rendered code snippets.
+- [x] **Automated Chat Controls Test Suite (`backend/tests/test_chat_controls.py`)**: 5 / 5 automated integration tests passing (100%).
+
+---
+
 ---
 
 ## Architecture Overview

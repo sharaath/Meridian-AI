@@ -71,6 +71,8 @@ export interface Message {
   attachments_json: MessageAttachmentMeta[];
   token_count: number;
   is_edited: boolean;
+  parent_id?: string | null;
+  feedback?: 'thumbs_up' | 'thumbs_down' | null;
   created_at: string;
 }
 

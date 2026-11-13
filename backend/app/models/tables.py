@@ -110,6 +110,10 @@ class Message(Base):
     attachments_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_edited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    parent_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    feedback: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 'thumbs_up', 'thumbs_down', None
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
     conversation = relationship("Conversation", back_populates="messages")

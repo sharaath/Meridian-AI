@@ -40,11 +40,32 @@ engine = _build_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _sync_message_columns(target_engine) -> None:
+    """Ensure message tree branching (parent_id) and feedback columns exist."""
+    try:
+        with target_engine.begin() as conn:
+            if target_engine.dialect.name == "sqlite":
+                res = conn.execute(text("PRAGMA table_info(messages);")).fetchall()
+                col_names = {row[1] for row in res}
+                if col_names:
+                    if "parent_id" not in col_names:
+                        conn.execute(text("ALTER TABLE messages ADD COLUMN parent_id VARCHAR(36);"))
+                    if "feedback" not in col_names:
+                        conn.execute(text("ALTER TABLE messages ADD COLUMN feedback VARCHAR(20);"))
+            elif target_engine.dialect.name == "postgresql":
+                conn.execute(text("ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS parent_id VARCHAR(36);"))
+                conn.execute(text("ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS feedback VARCHAR(20);"))
+    except Exception as exc:
+        import logging
+        logging.getLogger("uvicorn.error").debug("Column sync note: %s", exc)
+
+
 def init_db() -> None:
     """Create tables and ensure schema constraints support both Supabase and direct auth."""
     from app.models import tables  # noqa: F401
     try:
         Base.metadata.create_all(bind=engine)
+        _sync_message_columns(engine)
         if get_settings().is_postgres:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_id_fkey;"))
@@ -67,6 +88,7 @@ def _get_fallback_engine():
             connect_args={"check_same_thread": False},
         )
         Base.metadata.create_all(bind=_fallback_engine)
+        _sync_message_columns(_fallback_engine)
         _fallback_sessionmaker = sessionmaker(autocommit=False, autoflush=False, bind=_fallback_engine)
     return _fallback_sessionmaker
 

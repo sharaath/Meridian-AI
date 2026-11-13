@@ -33,6 +33,8 @@ class MessageOut(BaseModel):
     attachments_json: List[Dict[str, Any]]
     token_count: int
     is_edited: bool
+    parent_id: Optional[str] = None
+    feedback: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -67,17 +69,24 @@ class ChatSendRequest(BaseModel):
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=64, le=32768)
     top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    parent_id: Optional[str] = None
 
 
 class MessageEditRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=60000)
     model_id: Optional[str] = None
     use_web_search: bool = False
+    parent_id: Optional[str] = None
 
 
 class RegenerateRequest(BaseModel):
     model_id: Optional[str] = None
     use_web_search: bool = False
+    parent_id: Optional[str] = None
+
+
+class MessageFeedbackRequest(BaseModel):
+    feedback: Optional[str] = Field(default=None, pattern="^(thumbs_up|thumbs_down|like|dislike|)$")
 
 
 class ShareOut(BaseModel):

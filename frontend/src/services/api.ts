@@ -89,6 +89,8 @@ export interface StreamCallbacks {
     user_message_id: string;
     model_id: string;
     citations: Citation[];
+    parent_id?: string | null;
+    stream_id?: string;
   }) => void;
   onDelta?: (deltaText: string) => void;
   onDone?: (payload: {
@@ -291,21 +293,31 @@ export const api = {
       mode?: AssistantMode;
       attachment_ids?: string[];
       use_web_search?: boolean;
+      parent_id?: string | null;
     },
     callbacks: StreamCallbacks,
     signal?: AbortSignal
   ) => streamSsePost('/api/chat/stream', payload, callbacks, signal),
 
+  cancelStream: (conversationId: string) =>
+    request<{ status: string; conversation_id: string }>(`/api/chat/cancel/${conversationId}`, { method: 'POST' }),
+
+  setMessageFeedback: (messageId: string, feedback: 'thumbs_up' | 'thumbs_down' | null) =>
+    request<{ id: string; feedback: string | null }>(`/api/messages/${messageId}/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ feedback: feedback || '' }),
+    }),
+
   editAndResend: (
     messageId: string,
-    payload: { content: string; model_id?: string | null; use_web_search?: boolean },
+    payload: { content: string; model_id?: string | null; use_web_search?: boolean; parent_id?: string | null },
     callbacks: StreamCallbacks,
     signal?: AbortSignal
   ) => streamSsePost(`/api/chat/messages/${messageId}/edit`, payload, callbacks, signal),
 
   regenerateResponse: (
     conversationId: string,
-    payload: { model_id?: string | null; use_web_search?: boolean },
+    payload: { model_id?: string | null; use_web_search?: boolean; parent_id?: string | null },
     callbacks: StreamCallbacks,
     signal?: AbortSignal
   ) => streamSsePost(`/api/chat/conversations/${conversationId}/regenerate`, payload, callbacks, signal),

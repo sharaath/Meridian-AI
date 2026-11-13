@@ -107,6 +107,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   const [editingText, setEditingText] = useState('');
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+  const [selectedBranches, setSelectedBranches] = useState<Record<string, string>>({});
 
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -317,10 +318,53 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     }
   };
 
-  const handleStopStreaming = () => {
+  const handleStopStreaming = async () => {
+    const draft = streamDraft.trim();
     abortRef.current?.abort();
     abortRef.current = null;
     setStreaming(false);
+
+    const activeConvId = conv?.id;
+    if (activeConvId) {
+      api.cancelStream(activeConvId).catch(() => {});
+    }
+
+    if (draft) {
+      const partialAssistant: Message = {
+        id: `partial-${Date.now()}`,
+        conversation_id: activeConvId || '',
+        role: 'assistant',
+        content: draft,
+        model_id: selectedModel || '',
+        citations_json: streamCitations,
+        attachments_json: [],
+        token_count: 0,
+        is_edited: false,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, partialAssistant]);
+      setStreamDraft('');
+    }
+  };
+
+  const handleToggleFeedback = async (messageId: string, type: 'thumbs_up' | 'thumbs_down') => {
+    const target = messages.find((m) => m.id === messageId);
+    if (!target) return;
+    const nextFeedback = target.feedback === type ? null : type;
+
+    // Optimistic UI update
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, feedback: nextFeedback } : m))
+    );
+
+    try {
+      await api.setMessageFeedback(messageId, nextFeedback);
+    } catch {
+      // Revert if error
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, feedback: target.feedback } : m))
+      );
+    }
   };
 
   const handleSend = async (overridePrompt?: string) => {
@@ -331,6 +375,10 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     setLastFailedPrompt(null);
     setFollowUps([]);
     if (!overridePrompt) setInput('');
+
+    // Determine parent message (last message on the current active branch)
+    const { visible: currentVisible } = getVisibleMessages();
+    const parentMsg = currentVisible.length > 0 ? currentVisible[currentVisible.length - 1] : null;
 
     const optimisticUser: Message = {
       id: `temp-user-${Date.now()}`,
@@ -348,6 +396,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
       })),
       token_count: 0,
       is_edited: false,
+      parent_id: parentMsg ? parentMsg.id : null,
       created_at: new Date().toISOString(),
     };
 
@@ -373,6 +422,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
           mode,
           attachment_ids: filesToSend,
           use_web_search: useWebSearch,
+          parent_id: parentMsg ? parentMsg.id : null,
         },
         {
           onMeta: (meta) => {
@@ -394,6 +444,12 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             setStreamDraft('');
             setStreaming(false);
             setMessages((prev) => [...prev, donePayload.assistant_message]);
+            if (donePayload.assistant_message.parent_id) {
+              setSelectedBranches((prev) => ({
+                ...prev,
+                [donePayload.assistant_message.parent_id!]: donePayload.assistant_message.id,
+              }));
+            }
             setFollowUps(donePayload.follow_ups || []);
             await refreshSidebar();
             if (!conversationId && donePayload.conversation_id) {
@@ -421,24 +477,21 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     }
   };
 
-  const handleRegenerate = async () => {
+  const handleRegenerate = async (targetMsg?: Message) => {
     if (!conv?.id || streaming) return;
     setErrorMsg(null);
     setStreaming(true);
     setStreamDraft('');
-    setMessages((prev) => {
-      if (prev.length > 0 && prev[prev.length - 1].role === 'assistant') {
-        return prev.slice(0, -1);
-      }
-      return prev;
-    });
+
+    // If targetMsg is provided (assistant), its parent is the user message; otherwise find last user message
+    const parentId = targetMsg?.parent_id || (messages.filter((m) => m.role === 'user').slice(-1)[0]?.id);
 
     const controller = new AbortController();
     abortRef.current = controller;
     try {
       await api.regenerateResponse(
         conv.id,
-        { model_id: selectedModel, use_web_search: useWebSearch },
+        { model_id: selectedModel, use_web_search: useWebSearch, parent_id: parentId },
         {
           onMeta: (meta) => setStreamCitations(meta.citations || []),
           onDelta: (delta) => setStreamDraft((prev) => prev + delta),
@@ -446,6 +499,12 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             setStreamDraft('');
             setStreaming(false);
             setMessages((prev) => [...prev, done.assistant_message]);
+            if (done.assistant_message.parent_id) {
+              setSelectedBranches((prev) => ({
+                ...prev,
+                [done.assistant_message.parent_id!]: done.assistant_message.id,
+              }));
+            }
             setFollowUps(done.follow_ups || []);
           },
           onError: (detail) => {
@@ -465,15 +524,9 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   const handleSaveEdit = async (messageId: string) => {
     const nextText = editingText.trim();
     if (!nextText || streaming) return;
+    const targetMsg = messages.find((m) => m.id === messageId);
     setEditingMsgId(null);
     setErrorMsg(null);
-
-    const idx = messages.findIndex((m) => m.id === messageId);
-    if (idx !== -1) {
-      setMessages((prev) =>
-        prev.slice(0, idx + 1).map((m) => (m.id === messageId ? { ...m, content: nextText, is_edited: true } : m))
-      );
-    }
 
     setStreaming(true);
     setStreamDraft('');
@@ -483,14 +536,34 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
     try {
       await api.editAndResend(
         messageId,
-        { content: nextText, model_id: selectedModel, use_web_search: useWebSearch },
         {
-          onMeta: (meta) => setStreamCitations(meta.citations || []),
+          content: nextText,
+          model_id: selectedModel,
+          use_web_search: useWebSearch,
+          parent_id: targetMsg?.parent_id || null,
+        },
+        {
+          onMeta: (meta) => {
+            setStreamCitations(meta.citations || []);
+            // Update chosen branch for this parent
+            if (targetMsg?.parent_id || meta.parent_id) {
+              setSelectedBranches((prev) => ({
+                ...prev,
+                [targetMsg?.parent_id || 'root']: meta.user_message_id,
+              }));
+            }
+          },
           onDelta: (delta) => setStreamDraft((prev) => prev + delta),
           onDone: (done) => {
             setStreamDraft('');
             setStreaming(false);
             setMessages((prev) => [...prev, done.assistant_message]);
+            if (done.assistant_message.parent_id) {
+              setSelectedBranches((prev) => ({
+                ...prev,
+                [done.assistant_message.parent_id!]: done.assistant_message.id,
+              }));
+            }
             setFollowUps(done.follow_ups || []);
           },
           onError: (detail) => {
@@ -505,6 +578,66 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
       setStreaming(false);
       setStreamDraft('');
     }
+  };
+
+  // Message Tree Traversal: reconstruct visible path and branch indices (< 1/2 >)
+  const getVisibleMessages = (): {
+    visible: Message[];
+    branchInfo: Record<string, { index: number; total: number; siblings: Message[] }>;
+  } => {
+    if (!messages.length) return { visible: [], branchInfo: {} };
+
+    // Group messages by parent_id ('root' for null/empty)
+    const childrenByParent = new Map<string, Message[]>();
+    for (const msg of messages) {
+      const pId = msg.parent_id || 'root';
+      const list = childrenByParent.get(pId) || [];
+      list.push(msg);
+      childrenByParent.set(pId, list);
+    }
+
+    // Sort siblings chronologically
+    for (const [_, list] of childrenByParent.entries()) {
+      list.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    }
+
+    const visible: Message[] = [];
+    const branchInfo: Record<string, { index: number; total: number; siblings: Message[] }> = {};
+
+    let currentParent = 'root';
+    const visited = new Set<string>();
+
+    while (childrenByParent.has(currentParent)) {
+      const siblings = childrenByParent.get(currentParent)!;
+      if (!siblings.length) break;
+
+      // Select active sibling from selectedBranches or default to newest one
+      const chosenId = selectedBranches[currentParent];
+      const selectedMsg = siblings.find((s) => s.id === chosenId) || siblings[siblings.length - 1];
+
+      if (visited.has(selectedMsg.id)) break;
+      visited.add(selectedMsg.id);
+
+      visible.push(selectedMsg);
+
+      if (siblings.length > 1) {
+        const sIndex = siblings.findIndex((s) => s.id === selectedMsg.id);
+        branchInfo[selectedMsg.id] = {
+          index: sIndex + 1,
+          total: siblings.length,
+          siblings,
+        };
+      }
+
+      currentParent = selectedMsg.id;
+    }
+
+    // If tree is unlinked (legacy conversation), fallback to showing all messages chronologically
+    if (visible.length === 0 && messages.length > 0) {
+      return { visible: messages, branchInfo: {} };
+    }
+
+    return { visible, branchInfo };
   };
 
   const downloadExport = async (fetchBlob: () => Promise<Blob>, filename: string, fallbackUrl: string) => {
@@ -796,185 +929,303 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             </View>
           ) : (
             <View style={styles.messagesColumn}>
-              {messages.map((msg, idx) => {
-                const isUser = msg.role === 'user';
-                const isLastAssistant = !isUser && idx === messages.length - 1;
+              {(() => {
+                const { visible: displayMessages, branchInfo } = getVisibleMessages();
+                return displayMessages.map((msg, idx) => {
+                  const isUser = msg.role === 'user';
+                  const isLastAssistant = !isUser && idx === displayMessages.length - 1;
+                  const bInfo = branchInfo[msg.id];
 
-                if (isUser) {
-                  return (
-                    <View key={msg.id} style={[styles.msgRow, styles.msgRowUser]}>
-                      <View
-                        style={[
-                          styles.userBubble,
-                          { backgroundColor: palette.surfaceElevated, borderColor: palette.border },
-                        ]}
-                      >
-                        {msg.attachments_json?.length ? (
-                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                            {msg.attachments_json.map((att, aIdx) => (
-                              <View key={aIdx} style={[styles.attBadge, { backgroundColor: palette.surface }]}>
-                                <Ionicons name="attach" size={12} color={palette.accent} />
-                                <Text style={{ fontSize: 11.5, color: palette.textSecondary }}>{att.filename}</Text>
-                              </View>
-                            ))}
-                          </View>
-                        ) : null}
-
-                        {editingMsgId === msg.id ? (
-                          <View style={{ gap: 8 }}>
-                            <TextInput
-                              value={editingText}
-                              onChangeText={setEditingText}
-                              multiline
-                              style={[styles.editInput, { color: palette.text, borderColor: palette.accent }]}
-                            />
-                            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
-                              <TouchableOpacity onPress={() => setEditingMsgId(null)}>
-                                <Text style={{ color: palette.textMuted, fontSize: 13, fontWeight: '600' }}>Cancel</Text>
+                  if (isUser) {
+                    return (
+                      <View key={msg.id} style={[styles.msgRow, styles.msgRowUser]}>
+                        <View
+                          style={[
+                            styles.userBubble,
+                            { backgroundColor: palette.surfaceElevated, borderColor: palette.border },
+                          ]}
+                        >
+                          {/* Sibling Branch Switcher for User Message (< 1/2 >) */}
+                          {bInfo ? (
+                            <View style={[styles.branchSwitcher, { borderColor: palette.border, alignSelf: 'flex-start', marginBottom: 6 }]}>
+                              <TouchableOpacity
+                                disabled={bInfo.index <= 1}
+                                onPress={() => {
+                                  const prevSibling = bInfo.siblings[bInfo.index - 2];
+                                  if (prevSibling) {
+                                    setSelectedBranches((prev) => ({ ...prev, [msg.parent_id || 'root']: prevSibling.id }));
+                                  }
+                                }}
+                                style={{ paddingHorizontal: 3, opacity: bInfo.index <= 1 ? 0.3 : 1 }}
+                              >
+                                <Ionicons name="chevron-back" size={12} color={palette.textSecondary} />
                               </TouchableOpacity>
-                              <TouchableOpacity onPress={() => handleSaveEdit(msg.id)}>
-                                <Text style={{ color: palette.accent, fontSize: 13, fontWeight: '700' }}>Save & Resend</Text>
+                              <Text style={{ fontSize: 11, fontWeight: '700', color: palette.textSecondary }}>
+                                {bInfo.index}/{bInfo.total}
+                              </Text>
+                              <TouchableOpacity
+                                disabled={bInfo.index >= bInfo.total}
+                                onPress={() => {
+                                  const nextSibling = bInfo.siblings[bInfo.index];
+                                  if (nextSibling) {
+                                    setSelectedBranches((prev) => ({ ...prev, [msg.parent_id || 'root']: nextSibling.id }));
+                                  }
+                                }}
+                                style={{ paddingHorizontal: 3, opacity: bInfo.index >= bInfo.total ? 0.3 : 1 }}
+                              >
+                                <Ionicons name="chevron-forward" size={12} color={palette.textSecondary} />
                               </TouchableOpacity>
                             </View>
-                          </View>
-                        ) : (
-                          <Text selectable style={{ fontSize: 15, lineHeight: 22, color: palette.text }}>
-                            {msg.content}
-                          </Text>
-                        )}
+                          ) : null}
 
-                        <View style={[styles.msgActions, { justifyContent: 'flex-end', marginTop: 6 }]}>
-                          <Text style={{ fontSize: 11, color: palette.textMuted }}>
-                            {formatTime(msg.created_at)}
-                            {msg.is_edited ? ' · edited' : ''}
-                          </Text>
-                          <TouchableOpacity
-                            onPress={() => {
-                              setEditingMsgId(msg.id);
-                              setEditingText(msg.content);
-                            }}
-                            style={styles.actionPill}
-                          >
-                            <Ionicons name="pencil-outline" size={13} color={palette.textMuted} />
-                            <Text style={{ fontSize: 11.5, color: palette.textMuted }}>Edit</Text>
-                          </TouchableOpacity>
+                          {msg.attachments_json?.length ? (
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                              {msg.attachments_json.map((att, aIdx) => (
+                                <View key={aIdx} style={[styles.attBadge, { backgroundColor: palette.surface }]}>
+                                  <Ionicons name="attach" size={12} color={palette.accent} />
+                                  <Text style={{ fontSize: 11.5, color: palette.textSecondary }}>{att.filename}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
+
+                          {editingMsgId === msg.id ? (
+                            <View style={{ gap: 8 }}>
+                              <TextInput
+                                value={editingText}
+                                onChangeText={setEditingText}
+                                multiline
+                                style={[styles.editInput, { color: palette.text, borderColor: palette.accent }]}
+                              />
+                              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+                                <TouchableOpacity onPress={() => setEditingMsgId(null)}>
+                                  <Text style={{ color: palette.textMuted, fontSize: 13, fontWeight: '600' }}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={() => handleSaveEdit(msg.id)}>
+                                  <Text style={{ color: palette.accent, fontSize: 13, fontWeight: '700' }}>Save & Resend</Text>
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ) : (
+                            <Text selectable style={{ fontSize: 15, lineHeight: 22, color: palette.text }}>
+                              {msg.content}
+                            </Text>
+                          )}
+
+                          <View style={[styles.msgActions, { justifyContent: 'flex-end', marginTop: 6 }]}>
+                            <Text style={{ fontSize: 11, color: palette.textMuted }}>
+                              {formatTime(msg.created_at)}
+                              {msg.is_edited ? ' · edited' : ''}
+                            </Text>
+                            <TouchableOpacity
+                              onPress={async () => {
+                                await Clipboard.setStringAsync(msg.content);
+                                setCopiedMsgId(msg.id);
+                                setTimeout(() => setCopiedMsgId(null), 1600);
+                              }}
+                              style={styles.actionPill}
+                            >
+                              <Ionicons
+                                name={copiedMsgId === msg.id ? 'checkmark' : 'copy-outline'}
+                                size={13}
+                                color={copiedMsgId === msg.id ? palette.success : palette.textMuted}
+                              />
+                              <Text style={{ fontSize: 11.5, color: palette.textMuted }}>
+                                {copiedMsgId === msg.id ? 'Copied' : 'Copy'}
+                              </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              onPress={() => {
+                                setEditingMsgId(msg.id);
+                                setEditingText(msg.content);
+                              }}
+                              style={styles.actionPill}
+                            >
+                              <Ionicons name="pencil-outline" size={13} color={palette.textMuted} />
+                              <Text style={{ fontSize: 11.5, color: palette.textMuted }}>Edit</Text>
+                            </TouchableOpacity>
+                          </View>
                         </View>
+                      </View>
+                    );
+                  }
+
+                  return (
+                    <View key={msg.id} style={styles.assistantProseWrap}>
+                      <View style={[styles.assistantHeader, { justifyContent: 'space-between' }]}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <MeridianLogo size={22} showText={false} />
+                          <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>Meridian</Text>
+                          <Text style={{ fontSize: 11.5, color: palette.textMuted }}>{formatTime(msg.created_at)}</Text>
+                        </View>
+
+                        {/* Sibling Branch Switcher for Assistant Message (< 1/2 >) */}
+                        {bInfo ? (
+                          <View style={[styles.branchSwitcher, { borderColor: palette.border, backgroundColor: palette.surfaceElevated }]}>
+                            <TouchableOpacity
+                              disabled={bInfo.index <= 1}
+                              onPress={() => {
+                                const prevSibling = bInfo.siblings[bInfo.index - 2];
+                                if (prevSibling) {
+                                  setSelectedBranches((prev) => ({ ...prev, [msg.parent_id || 'root']: prevSibling.id }));
+                                }
+                              }}
+                              style={{ paddingHorizontal: 3, opacity: bInfo.index <= 1 ? 0.3 : 1 }}
+                            >
+                              <Ionicons name="chevron-back" size={12} color={palette.textSecondary} />
+                            </TouchableOpacity>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: palette.textSecondary }}>
+                              {bInfo.index}/{bInfo.total}
+                            </Text>
+                            <TouchableOpacity
+                              disabled={bInfo.index >= bInfo.total}
+                              onPress={() => {
+                                const nextSibling = bInfo.siblings[bInfo.index];
+                                if (nextSibling) {
+                                  setSelectedBranches((prev) => ({ ...prev, [msg.parent_id || 'root']: nextSibling.id }));
+                                }
+                              }}
+                              style={{ paddingHorizontal: 3, opacity: bInfo.index >= bInfo.total ? 0.3 : 1 }}
+                            >
+                              <Ionicons name="chevron-forward" size={12} color={palette.textSecondary} />
+                            </TouchableOpacity>
+                          </View>
+                        ) : null}
+                      </View>
+
+                      <MarkdownRenderer content={msg.content} />
+
+                      {hasArtifactContent(msg.content) ? (
+                        <TouchableOpacity
+                          onPress={() => setPreviewMsg(msg)}
+                          style={[styles.artifactCard, { backgroundColor: palette.surface, borderColor: palette.border }]}
+                        >
+                          <View style={[styles.artifactIcon, { backgroundColor: palette.accentSoft }]}>
+                            <Ionicons name="layers-outline" size={18} color={palette.accent} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 13.5, fontWeight: '700', color: palette.text }}>
+                              Open Artifact & Document Viewer
+                            </Text>
+                            <Text style={{ fontSize: 12, color: palette.textMuted }}>
+                              Preview formatted content, PDF, PowerPoint slides, or Word document
+                            </Text>
+                          </View>
+                          <Ionicons name="chevron-forward" size={17} color={palette.textMuted} />
+                        </TouchableOpacity>
+                      ) : null}
+
+                      {/* Citations */}
+                      {msg.citations_json?.length ? (
+                        <View style={[styles.citationsBox, { borderTopColor: palette.border }]}>
+                          <Text style={{ fontSize: 11.5, fontWeight: '700', color: palette.textMuted, marginBottom: 4 }}>
+                            Sources
+                          </Text>
+                          {msg.citations_json.map((cite, cIdx) => (
+                            <TouchableOpacity
+                              key={cIdx}
+                              onPress={() => cite.url && Linking.openURL(cite.url).catch(() => {})}
+                              style={{ marginBottom: 3 }}
+                            >
+                              <Text numberOfLines={1} style={{ fontSize: 12, color: palette.accent }}>
+                                [{cIdx + 1}] {cite.title}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      ) : null}
+
+                      {/* Message Action Bar */}
+                      <View style={styles.msgActions}>
+                        {/* Copy Button */}
+                        <TouchableOpacity
+                          onPress={async () => {
+                            await Clipboard.setStringAsync(msg.content);
+                            setCopiedMsgId(msg.id);
+                            setTimeout(() => setCopiedMsgId(null), 1600);
+                          }}
+                          style={styles.actionPill}
+                        >
+                          <Ionicons
+                            name={copiedMsgId === msg.id ? 'checkmark' : 'copy-outline'}
+                            size={13}
+                            color={copiedMsgId === msg.id ? palette.success : palette.textMuted}
+                          />
+                          <Text style={{ fontSize: 11.5, color: palette.textMuted }}>
+                            {copiedMsgId === msg.id ? 'Copied' : 'Copy'}
+                          </Text>
+                        </TouchableOpacity>
+
+                        {/* Thumbs Up Feedback */}
+                        <TouchableOpacity
+                          onPress={() => handleToggleFeedback(msg.id, 'thumbs_up')}
+                          style={styles.actionPill}
+                          accessibilityLabel="Helpful"
+                        >
+                          <Ionicons
+                            name={msg.feedback === 'thumbs_up' ? 'thumbs-up' : 'thumbs-up-outline'}
+                            size={13}
+                            color={msg.feedback === 'thumbs_up' ? palette.accent : palette.textMuted}
+                          />
+                        </TouchableOpacity>
+
+                        {/* Thumbs Down Feedback */}
+                        <TouchableOpacity
+                          onPress={() => handleToggleFeedback(msg.id, 'thumbs_down')}
+                          style={styles.actionPill}
+                          accessibilityLabel="Not helpful"
+                        >
+                          <Ionicons
+                            name={msg.feedback === 'thumbs_down' ? 'thumbs-down' : 'thumbs-down-outline'}
+                            size={13}
+                            color={msg.feedback === 'thumbs_down' ? palette.danger : palette.textMuted}
+                          />
+                        </TouchableOpacity>
+
+                        {/* Speak Button */}
+                        <TouchableOpacity onPress={() => toggleSpeak(msg)} style={styles.actionPill}>
+                          <Ionicons
+                            name={speakingMsgId === msg.id ? 'stop-circle-outline' : 'volume-high-outline'}
+                            size={14}
+                            color={palette.textMuted}
+                          />
+                          <Text style={{ fontSize: 11.5, color: palette.textMuted }}>
+                            {speakingMsgId === msg.id ? 'Stop' : 'Speak'}
+                          </Text>
+                        </TouchableOpacity>
+
+                        {/* Regenerate Button */}
+                        {!streaming ? (
+                          <TouchableOpacity onPress={() => handleRegenerate(msg)} style={styles.actionPill}>
+                            <Ionicons name="refresh-outline" size={13} color={palette.textMuted} />
+                            <Text style={{ fontSize: 11.5, color: palette.textMuted }}>Regenerate</Text>
+                          </TouchableOpacity>
+                        ) : null}
+
+                        <TouchableOpacity onPress={() => setPreviewMsg(msg)} style={styles.actionPill}>
+                          <Ionicons name="eye-outline" size={14} color={palette.accent} />
+                          <Text style={{ fontSize: 11.5, fontWeight: '700', color: palette.accent }}>Preview</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity onPress={() => handleSaveMessageFile(msg.id, 'pdf')} style={styles.actionPill}>
+                          <Ionicons name="download-outline" size={14} color={palette.accent} />
+                          <Text style={{ fontSize: 11.5, fontWeight: '600', color: palette.accent }}>PDF</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity onPress={() => handleSaveMessageFile(msg.id, 'docx')} style={styles.actionPill}>
+                          <Ionicons name="document-text-outline" size={14} color={palette.accent} />
+                          <Text style={{ fontSize: 11.5, fontWeight: '600', color: palette.accent }}>DOCX</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity onPress={() => handleSaveMessageFile(msg.id, 'pptx')} style={styles.actionPill}>
+                          <Ionicons name="easel-outline" size={14} color={palette.accent} />
+                          <Text style={{ fontSize: 11.5, fontWeight: '600', color: palette.accent }}>PPTX</Text>
+                        </TouchableOpacity>
                       </View>
                     </View>
                   );
-                }
-
-                return (
-                  <View key={msg.id} style={styles.assistantProseWrap}>
-                    <View style={styles.assistantHeader}>
-                      <MeridianLogo size={22} showText={false} />
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>Meridian</Text>
-                      <Text style={{ fontSize: 11.5, color: palette.textMuted }}>{formatTime(msg.created_at)}</Text>
-                    </View>
-
-                    <MarkdownRenderer content={msg.content} />
-
-                    {hasArtifactContent(msg.content) ? (
-                      <TouchableOpacity
-                        onPress={() => setPreviewMsg(msg)}
-                        style={[styles.artifactCard, { backgroundColor: palette.surface, borderColor: palette.border }]}
-                      >
-                        <View style={[styles.artifactIcon, { backgroundColor: palette.accentSoft }]}>
-                          <Ionicons name="layers-outline" size={18} color={palette.accent} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: 13.5, fontWeight: '700', color: palette.text }}>
-                            Open Artifact & Document Viewer
-                          </Text>
-                          <Text style={{ fontSize: 12, color: palette.textMuted }}>
-                            Preview formatted content, PDF, PowerPoint slides, or Word document
-                          </Text>
-                        </View>
-                        <Ionicons name="chevron-forward" size={17} color={palette.textMuted} />
-                      </TouchableOpacity>
-                    ) : null}
-
-                    {/* Citations */}
-                    {msg.citations_json?.length ? (
-                      <View style={[styles.citationsBox, { borderTopColor: palette.border }]}>
-                        <Text style={{ fontSize: 11.5, fontWeight: '700', color: palette.textMuted, marginBottom: 4 }}>
-                          Sources
-                        </Text>
-                        {msg.citations_json.map((cite, cIdx) => (
-                          <TouchableOpacity
-                            key={cIdx}
-                            onPress={() => cite.url && Linking.openURL(cite.url).catch(() => {})}
-                            style={{ marginBottom: 3 }}
-                          >
-                            <Text numberOfLines={1} style={{ fontSize: 12, color: palette.accent }}>
-                              [{cIdx + 1}] {cite.title}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    ) : null}
-
-                    {/* Message Action Bar */}
-                    <View style={styles.msgActions}>
-                      <TouchableOpacity
-                        onPress={async () => {
-                          await Clipboard.setStringAsync(msg.content);
-                          setCopiedMsgId(msg.id);
-                          setTimeout(() => setCopiedMsgId(null), 1600);
-                        }}
-                        style={styles.actionPill}
-                      >
-                        <Ionicons
-                          name={copiedMsgId === msg.id ? 'checkmark' : 'copy-outline'}
-                          size={13}
-                          color={palette.textMuted}
-                        />
-                        <Text style={{ fontSize: 11.5, color: palette.textMuted }}>
-                          {copiedMsgId === msg.id ? 'Copied' : 'Copy'}
-                        </Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity onPress={() => toggleSpeak(msg)} style={styles.actionPill}>
-                        <Ionicons
-                          name={speakingMsgId === msg.id ? 'stop-circle-outline' : 'volume-high-outline'}
-                          size={14}
-                          color={palette.textMuted}
-                        />
-                        <Text style={{ fontSize: 11.5, color: palette.textMuted }}>
-                          {speakingMsgId === msg.id ? 'Stop' : 'Speak'}
-                        </Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity onPress={() => setPreviewMsg(msg)} style={styles.actionPill}>
-                        <Ionicons name="eye-outline" size={14} color={palette.accent} />
-                        <Text style={{ fontSize: 11.5, fontWeight: '700', color: palette.accent }}>Preview</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity onPress={() => handleSaveMessageFile(msg.id, 'pdf')} style={styles.actionPill}>
-                        <Ionicons name="download-outline" size={14} color={palette.accent} />
-                        <Text style={{ fontSize: 11.5, fontWeight: '600', color: palette.accent }}>PDF</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity onPress={() => handleSaveMessageFile(msg.id, 'docx')} style={styles.actionPill}>
-                        <Ionicons name="document-text-outline" size={14} color={palette.accent} />
-                        <Text style={{ fontSize: 11.5, fontWeight: '600', color: palette.accent }}>DOCX</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity onPress={() => handleSaveMessageFile(msg.id, 'pptx')} style={styles.actionPill}>
-                        <Ionicons name="easel-outline" size={14} color={palette.accent} />
-                        <Text style={{ fontSize: 11.5, fontWeight: '600', color: palette.accent }}>PPTX</Text>
-                      </TouchableOpacity>
-
-                      {isLastAssistant && !streaming ? (
-                        <TouchableOpacity onPress={handleRegenerate} style={styles.actionPill}>
-                          <Ionicons name="refresh-outline" size={13} color={palette.textMuted} />
-                          <Text style={{ fontSize: 11.5, color: palette.textMuted }}>Regenerate</Text>
-                        </TouchableOpacity>
-                      ) : null}
-                    </View>
-                  </View>
-                );
-              })}
+                });
+              })()}
 
               {/* Active Streaming Editorial Prose */}
               {streaming ? (
@@ -985,7 +1236,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
                     <ActivityIndicator size="small" color={palette.accent} />
                   </View>
                   {streamDraft ? (
-                    <MarkdownRenderer content={streamDraft} />
+                    <MarkdownRenderer content={streamDraft} isStreaming={true} />
                   ) : (
                     <Text style={{ fontSize: 14, color: palette.textMuted }}>Thinking...</Text>
                   )}
@@ -1274,6 +1525,15 @@ const styles = StyleSheet.create({
     padding: 8,
     fontSize: 14.5,
     minHeight: 60,
+  },
+  branchSwitcher: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
   },
   citationsBox: {
     marginTop: 10,

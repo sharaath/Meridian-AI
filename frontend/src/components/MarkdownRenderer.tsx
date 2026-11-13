@@ -11,14 +11,23 @@ interface CodeBlockProps {
 
 const CODE_KEYWORDS = new Set([
   'import', 'from', 'export', 'default', 'const', 'let', 'var', 'function', 'return', 'async', 'await',
-  'if', 'else', 'for', 'while', 'try', 'catch', 'finally', 'class', 'extends', 'def', 'None', 'True',
-  'False', 'true', 'false', 'null', 'undefined', 'interface', 'type', 'SELECT', 'FROM', 'WHERE',
-  'CREATE', 'TABLE', 'INSERT', 'INTO', 'VALUES', 'public', 'private', 'static', 'void', 'new',
+  'if', 'else', 'elif', 'for', 'while', 'try', 'catch', 'finally', 'except', 'with', 'as', 'yield',
+  'lambda', 'in', 'is', 'not', 'and', 'or', 'class', 'extends', 'def', 'None', 'True', 'False',
+  'true', 'false', 'null', 'undefined', 'interface', 'type', 'enum', 'implements', 'public', 'private',
+  'static', 'void', 'new', 'switch', 'case', 'break', 'continue', 'typeof', 'instanceof', 'self', 'cls',
+  'SELECT', 'FROM', 'WHERE', 'CREATE', 'TABLE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'DELETE',
+  'JOIN', 'LEFT', 'RIGHT', 'INNER', 'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET',
+  'fn', 'pub', 'mut', 'struct', 'impl', 'match', 'package', 'func', 'range', 'chan', 'go',
+]);
+
+const CODE_TYPES = new Set([
+  'int', 'float', 'str', 'bool', 'list', 'dict', 'set', 'tuple', 'any', 'number', 'string',
+  'boolean', 'Promise', 'Array', 'Record', 'Map', 'Set', 'Vector', 'Option', 'Result',
 ]);
 
 function renderHighlightedLine(line: string, keyPrefix: string) {
   const trimmed = line.trimStart();
-  if (trimmed.startsWith('//') || trimmed.startsWith('#')) {
+  if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('--') || trimmed.startsWith('/*')) {
     return (
       <Text key={keyPrefix} style={{ color: '#94A3B8', fontStyle: 'italic' }}>
         {line}
@@ -33,6 +42,13 @@ function renderHighlightedLine(line: string, keyPrefix: string) {
         if (CODE_KEYWORDS.has(tok)) {
           return (
             <Text key={`${keyPrefix}-${idx}`} style={{ color: '#38BDF8', fontWeight: '600' }}>
+              {tok}
+            </Text>
+          );
+        }
+        if (CODE_TYPES.has(tok)) {
+          return (
+            <Text key={`${keyPrefix}-${idx}`} style={{ color: '#C084FC', fontWeight: '500' }}>
               {tok}
             </Text>
           );
@@ -210,7 +226,15 @@ function splitBlocks(markdown: string): Block[] {
   return blocks;
 }
 
-export function MarkdownRenderer({ content, textColor }: { content: string; textColor?: string }) {
+export function MarkdownRenderer({
+  content,
+  textColor,
+  isStreaming = false,
+}: {
+  content: string;
+  textColor?: string;
+  isStreaming?: boolean;
+}) {
   const { palette } = useTheme();
   const fg = textColor || palette.text;
   const blocks = splitBlocks(content);
@@ -218,6 +242,7 @@ export function MarkdownRenderer({ content, textColor }: { content: string; text
   return (
     <View style={{ gap: 8 }}>
       {blocks.map((block, bIdx) => {
+        const isLastBlock = bIdx === blocks.length - 1;
         if (block.type === 'code') {
           return <CodeBlock key={bIdx} language={block.language} code={block.content} />;
         }
@@ -320,6 +345,9 @@ export function MarkdownRenderer({ content, textColor }: { content: string; text
           </View>
         );
       })}
+      {isStreaming ? (
+        <Text style={{ color: palette.accent, fontSize: 16, fontWeight: '700' }}>▊</Text>
+      ) : null}
     </View>
   );
 }

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
+import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -33,6 +35,7 @@ from app.schemas.chat import (
     ConversationOut,
     ConversationUpdate,
     MessageEditRequest,
+    MessageFeedbackRequest,
     MessageOut,
     RegenerateRequest,
     ShareOut,
@@ -251,6 +254,34 @@ def _build_history_inputs(db: Session, user_id: str, messages: List[Message]) ->
     return history
 
 
+# Active SSE stream cancellation tokens (keyed by conversation_id and stream_id)
+active_cancellations: Dict[str, asyncio.Event] = {}
+
+
+def _get_branch_messages(db: Session, conversation_id: str, leaf_message: Message) -> List[Message]:
+    """Traverse from leaf_message up via parent_id to reconstruct the exact linear branch history."""
+    all_msgs = {
+        m.id: m
+        for m in db.query(Message)
+        .filter(Message.conversation_id == conversation_id)
+        .all()
+    }
+    branch: List[Message] = []
+    curr: Optional[Message] = leaf_message
+    visited = set()
+
+    while curr and curr.id not in visited:
+        visited.add(curr.id)
+        branch.append(curr)
+        if curr.parent_id and curr.parent_id in all_msgs:
+            curr = all_msgs[curr.parent_id]
+        else:
+            break
+
+    branch.reverse()
+    return branch
+
+
 @router.get("/conversations", response_model=List[ConversationOut])
 def list_conversations(
     q: Optional[str] = Query(default=None, max_length=200),
@@ -381,13 +412,16 @@ async def _stream_completion(
             citations = [{"title": "Web search unavailable", "url": "", "snippet": str(exc), "source": "system"}]
 
     system_instruction = _build_system_instruction(db, user, conversation, search_context=search_context)
-    conv_messages = (
-        db.query(Message)
-        .filter(Message.conversation_id == conversation.id)
-        .order_by(Message.created_at.asc())
-        .all()
-    )
-    history = _build_history_inputs(db, user.id, conv_messages)
+
+    # Phase 1: Reconstruct history strictly along the active branch up to user_message
+    branch_messages = _get_branch_messages(db, conversation.id, user_message)
+    history = _build_history_inputs(db, user.id, branch_messages)
+
+    # Register cancellation event for this stream
+    stream_id = str(uuid.uuid4())
+    cancel_event = asyncio.Event()
+    active_cancellations[conversation.id] = cancel_event
+    active_cancellations[stream_id] = cancel_event
 
     yield _sse_event(
         "meta",
@@ -395,6 +429,8 @@ async def _stream_completion(
             "conversation_id": conversation.id,
             "conversation_title": conversation.title,
             "user_message_id": user_message.id,
+            "stream_id": stream_id,
+            "parent_id": user_message.parent_id,
             "model_id": model.id,
             "citations": citations,
         },
@@ -416,9 +452,13 @@ async def _stream_completion(
     prompt_tokens = 0
     completion_tokens = 0
     total_tokens = 0
+    is_cancelled = False
 
     try:
         async for chunk in provider.stream_chat(model_id=model.id, messages=history, config=cfg):
+            if cancel_event.is_set():
+                is_cancelled = True
+                break
             if chunk.delta:
                 accumulated.append(chunk.delta)
                 yield _sse_event("delta", {"text": chunk.delta})
@@ -426,13 +466,19 @@ async def _stream_completion(
                 prompt_tokens = chunk.prompt_tokens
                 completion_tokens = chunk.completion_tokens
                 total_tokens = chunk.total_tokens
+    except (asyncio.CancelledError, GeneratorExit):
+        is_cancelled = True
     except AIProviderError as exc:
         yield _sse_event("error", {"detail": str(exc)})
         return
+    finally:
+        active_cancellations.pop(conversation.id, None)
+        active_cancellations.pop(stream_id, None)
 
+    # Phase 1: Always persist reply — whether full or partial — so nothing is lost on cancel
     full_text = "".join(accumulated).strip()
     if not full_text:
-        full_text = "(No response generated)"
+        full_text = "(Stopped)" if is_cancelled else "(No response generated)"
 
     assistant_msg = Message(
         conversation_id=conversation.id,
@@ -441,6 +487,7 @@ async def _stream_completion(
         model_id=model.id,
         citations_json=citations,
         token_count=total_tokens,
+        parent_id=user_message.id,
     )
     db.add(assistant_msg)
     conversation.model_id = model.id
@@ -458,6 +505,17 @@ async def _stream_completion(
     )
     db.commit()
     db.refresh(assistant_msg)
+
+    if is_cancelled:
+        yield _sse_event(
+            "cancelled",
+            {
+                "conversation_id": conversation.id,
+                "assistant_message": MessageOut.model_validate(assistant_msg).model_dump(mode="json"),
+                "partial": True,
+            },
+        )
+        return
 
     yield _sse_event(
         "done",
@@ -504,6 +562,18 @@ async def stream_chat(
         db.commit()
         db.refresh(conv)
 
+    # Determine parent_id for message branching tree
+    parent_id = payload.parent_id
+    if not parent_id and payload.conversation_id:
+        latest_msg = (
+            db.query(Message)
+            .filter(Message.conversation_id == conv.id)
+            .order_by(Message.created_at.desc())
+            .first()
+        )
+        if latest_msg:
+            parent_id = latest_msg.id
+
     _, att_meta = _load_attachments_for_ids(db, current_user.id, payload.attachment_ids)
     user_msg = Message(
         conversation_id=conv.id,
@@ -511,6 +581,7 @@ async def stream_chat(
         content=payload.content,
         model_id=model.id,
         attachments_json=att_meta,
+        parent_id=parent_id,
     )
     db.add(user_msg)
     conv.updated_at = datetime.now(timezone.utc)
@@ -532,6 +603,21 @@ async def stream_chat(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/chat/cancel/{conversation_id}")
+def cancel_chat_stream(
+    conversation_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Explicitly cancel active SSE stream for a conversation and trigger server partial save."""
+    _get_owned_conversation(db, conversation_id, current_user.id)
+    event = active_cancellations.get(conversation_id)
+    if event:
+        event.set()
+        return {"status": "cancelled", "conversation_id": conversation_id}
+    return {"status": "not_active", "conversation_id": conversation_id}
 
 
 @router.post("/chat/messages/{message_id}/edit")
@@ -560,27 +646,29 @@ async def edit_and_resend_message(
     except AIProviderError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    # Delete messages strictly after target message in chronological order
-    later_messages = (
-        db.query(Message)
-        .filter(Message.conversation_id == conv.id, Message.created_at > target.created_at)
-        .all()
+    # Phase 1: Message Tree Branching:
+    # Instead of deleting subsequent messages, create a new sibling user message sharing target's parent_id.
+    parent_id = payload.parent_id if payload.parent_id is not None else target.parent_id
+    new_user_msg = Message(
+        conversation_id=conv.id,
+        role="user",
+        content=payload.content,
+        model_id=model.id,
+        attachments_json=target.attachments_json,
+        parent_id=parent_id,
+        is_edited=True,
     )
-    for m in later_messages:
-        db.delete(m)
-
-    target.content = payload.content
-    target.is_edited = True
+    db.add(new_user_msg)
     conv.updated_at = datetime.now(timezone.utc)
     db.commit()
-    db.refresh(target)
+    db.refresh(new_user_msg)
 
     return StreamingResponse(
         _stream_completion(
             db=db,
             user=current_user,
             conversation=conv,
-            user_message=target,
+            user_message=new_user_msg,
             model_id=model.id,
             use_web_search=payload.use_web_search,
         ),
@@ -606,23 +694,60 @@ async def regenerate_last_response(
     except AIProviderError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    messages = (
-        db.query(Message)
-        .filter(Message.conversation_id == conv.id)
-        .order_by(Message.created_at.asc())
-        .all()
-    )
-    if not messages:
-        raise HTTPException(status_code=400, detail="Conversation has no messages to regenerate.")
+    # Phase 1: Branching message tree:
+    # If parent_id provided, regenerate off that user message; otherwise find the last user message.
+    if payload.parent_id:
+        target_user = (
+            db.query(Message)
+            .filter(Message.id == payload.parent_id, Message.conversation_id == conv.id, Message.role == "user")
+            .first()
+        )
+    else:
+        target_user = (
+            db.query(Message)
+            .filter(Message.conversation_id == conv.id, Message.role == "user")
+            .order_by(Message.created_at.desc())
+            .first()
+        )
 
-    if messages[-1].role == "assistant":
-        db.delete(messages[-1])
-        db.commit()
-        messages.pop()
-
-    last_user = next((m for m in reversed(messages) if m.role == "user"), None)
-    if not last_user:
+    if not target_user:
         raise HTTPException(status_code=400, detail="No user message found to regenerate from.")
+
+    return StreamingResponse(
+        _stream_completion(
+            db=db,
+            user=current_user,
+            conversation=conv,
+            user_message=target_user,
+            model_id=model.id,
+            use_web_search=payload.use_web_search,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/messages/{message_id}/feedback")
+def set_message_feedback(
+    message_id: str,
+    payload: MessageFeedbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Store or clear thumbs up / thumbs down feedback per message."""
+    msg = (
+        db.query(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .filter(Message.id == message_id, Conversation.user_id == current_user.id)
+        .first()
+    )
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found.")
+
+    msg.feedback = payload.feedback if payload.feedback else None
+    db.commit()
+    db.refresh(msg)
+    return {"id": msg.id, "feedback": msg.feedback}
 
     return StreamingResponse(
         _stream_completion(
