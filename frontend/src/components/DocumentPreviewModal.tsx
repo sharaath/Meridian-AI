@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -14,9 +15,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { useTheme } from '@/contexts/ThemeContext';
 import { api } from '@/services/api';
-import { Message } from '@/types/api';
+import { DiffChunk, EditChecklistItem, Message, PreciseEditResponse, VersionHistoryItem } from '@/types/api';
 
-type PreviewTab = 'artifact' | 'pdf' | 'pptx' | 'docx';
+type PreviewTab = 'artifact' | 'edit' | 'pdf' | 'pptx' | 'docx';
 
 interface SlideItem {
   title: string;
@@ -60,23 +61,27 @@ function parseSlidesFromMarkdown(content: string): SlideItem[] {
   }
 
   if (currentTitle || currentBullets.length) {
-    slides.push({ title: currentTitle || 'Meridian Presentation', bullets: currentBullets });
+    slides.push({ title: currentTitle || `Slide ${slides.length + 1}`, bullets: currentBullets });
   }
-  if (slides.length === 0) {
-    slides.push({ title: 'Slide 1', bullets: [stripInlineMd(content)] });
-  }
+
   return slides;
 }
 
-interface Props {
+interface DocumentPreviewModalProps {
   visible: boolean;
   message: Message | null;
-  inlinePane?: boolean;
   onClose: () => void;
   onDownload: (messageId: string, format: 'pdf' | 'docx' | 'pptx') => void;
+  inlinePane?: boolean;
 }
 
-export function DocumentPreviewModal({ visible, message, inlinePane = false, onClose, onDownload }: Props) {
+export function DocumentPreviewModal({
+  visible,
+  message,
+  onClose,
+  onDownload,
+  inlinePane = false,
+}: DocumentPreviewModalProps) {
   const { palette } = useTheme();
   const [tab, setTab] = useState<PreviewTab>('artifact');
   const [slideIndex, setSlideIndex] = useState(0);
@@ -85,7 +90,39 @@ export function DocumentPreviewModal({ visible, message, inlinePane = false, onC
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const slides = useMemo(() => (message ? parseSlidesFromMarkdown(message.content) : []), [message]);
+  // Phase 1B: Precise Editing & Diff State
+  const [activeContent, setActiveContent] = useState<string>('');
+  const [instructionText, setInstructionText] = useState<string>('');
+  const [selectionText, setSelectionText] = useState<string>('');
+  const [isApplyingEdit, setIsApplyingEdit] = useState<boolean>(false);
+  const [editResponse, setEditResponse] = useState<PreciseEditResponse | null>(null);
+  const [diffViewMode, setDiffViewMode] = useState<'diff' | 'preview'>('diff');
+  const [versionHistory, setVersionHistory] = useState<VersionHistoryItem[]>([]);
+  const [currentVersionIdx, setCurrentVersionIdx] = useState<number>(0);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (message) {
+      setActiveContent(message.content);
+      setEditResponse(null);
+      setInstructionText('');
+      setSelectionText('');
+      setEditError(null);
+      setVersionHistory([
+        {
+          version_id: 'v1',
+          version_number: 1,
+          timestamp: new Date().toISOString(),
+          instruction: 'Original Version',
+          content: message.content,
+          status: 'current',
+        },
+      ]);
+      setCurrentVersionIdx(0);
+    }
+  }, [message]);
+
+  const slides = useMemo(() => parseSlidesFromMarkdown(activeContent || message?.content || ''), [activeContent, message]);
 
   useEffect(() => {
     setSlideIndex(0);
@@ -131,6 +168,91 @@ export function DocumentPreviewModal({ visible, message, inlinePane = false, onC
   const activeSlide = slides[Math.min(slideIndex, Math.max(0, slides.length - 1))];
   const downloadFormat: 'pdf' | 'docx' | 'pptx' = tab === 'pptx' || tab === 'docx' ? tab : 'pdf';
 
+  const handleApplyEdit = async () => {
+    if (!instructionText.trim()) return;
+    setIsApplyingEdit(true);
+    setEditError(null);
+
+    try {
+      let res: PreciseEditResponse;
+      if (selectionText.trim()) {
+        res = await api.selectionEdit({
+          full_content: activeContent,
+          selection: selectionText.trim(),
+          instruction: instructionText.trim(),
+          resource_id: message.id,
+        });
+      } else {
+        res = await api.preciseEdit({
+          content: activeContent,
+          instruction: instructionText.trim(),
+          resource_id: message.id,
+        });
+      }
+
+      setEditResponse(res);
+      if (res.success) {
+        const newVer: VersionHistoryItem = {
+          version_id: res.version_id || `v${versionHistory.length + 1}`,
+          version_number: versionHistory.length + 1,
+          timestamp: new Date().toISOString(),
+          instruction: instructionText.trim(),
+          content: res.edited_text,
+          diff_summary: res.diff,
+          status: 'current',
+        };
+        const updated = [...versionHistory, newVer];
+        setVersionHistory(updated);
+        setCurrentVersionIdx(updated.length - 1);
+        setActiveContent(res.edited_text);
+        setDiffViewMode('diff');
+      } else if (res.ambiguity?.is_ambiguous) {
+        setEditError(res.ambiguity.clarifying_question || 'Instruction is ambiguous.');
+      }
+    } catch (err: any) {
+      setEditError(err.message || 'Edit failed.');
+    } finally {
+      setIsApplyingEdit(false);
+    }
+  };
+
+  const handleAccept = () => {
+    if (!versionHistory.length) return;
+    const current = versionHistory[currentVersionIdx];
+    api.versionAction(message.id, current.version_id, 'accept').catch(() => {});
+    setDiffViewMode('preview');
+  };
+
+  const handleReject = () => {
+    if (versionHistory.length <= 1) return;
+    const prevIdx = Math.max(0, currentVersionIdx - 1);
+    const restored = versionHistory[prevIdx];
+    setCurrentVersionIdx(prevIdx);
+    setActiveContent(restored.content);
+    setEditResponse(null);
+    setDiffViewMode('preview');
+  };
+
+  const handleUndo = () => {
+    if (currentVersionIdx > 0) {
+      const prevIdx = currentVersionIdx - 1;
+      const restored = versionHistory[prevIdx];
+      setCurrentVersionIdx(prevIdx);
+      setActiveContent(restored.content);
+      if (restored.diff_summary) {
+        setEditResponse({
+          success: true,
+          original_text: versionHistory[Math.max(0, prevIdx - 1)].content,
+          edited_text: restored.content,
+          checklist: [],
+          diff: restored.diff_summary,
+          unrelated_notes: [],
+          version_number: restored.version_number,
+        });
+      }
+    }
+  };
+
   const renderPanelContent = () => (
     <View
       style={[
@@ -138,12 +260,13 @@ export function DocumentPreviewModal({ visible, message, inlinePane = false, onC
         { backgroundColor: palette.surface, borderColor: palette.border },
       ]}
     >
-      {/* Header */}
+      {/* Header Tabs */}
       <View style={[styles.header, { borderBottomColor: palette.border }]}>
         <View style={styles.tabsRow}>
           {(
             [
               { id: 'artifact', label: 'Artifact', icon: 'sparkles-outline' },
+              { id: 'edit', label: 'Precise Edit & Diff', icon: 'git-commit-outline' },
               { id: 'pdf', label: 'PDF', icon: 'document-outline' },
               { id: 'pptx', label: `Slides (${slides.length})`, icon: 'easel-outline' },
               { id: 'docx', label: 'Word', icon: 'document-text-outline' },
@@ -174,7 +297,7 @@ export function DocumentPreviewModal({ visible, message, inlinePane = false, onC
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <TouchableOpacity
             onPress={async () => {
-              await Clipboard.setStringAsync(message.content);
+              await Clipboard.setStringAsync(activeContent);
               setCopied(true);
               setTimeout(() => setCopied(false), 1600);
             }}
@@ -202,12 +325,209 @@ export function DocumentPreviewModal({ visible, message, inlinePane = false, onC
 
       {/* Body */}
       <View style={styles.body}>
+        {/* Artifact View */}
         {tab === 'artifact' ? (
           <ScrollView contentContainerStyle={{ padding: 8 }}>
-            <MarkdownRenderer content={message.content} />
+            <MarkdownRenderer content={activeContent} />
           </ScrollView>
         ) : null}
 
+        {/* Phase 1B: Precise Edit & Diff View */}
+        {tab === 'edit' ? (
+          <View style={{ flex: 1, gap: 10 }}>
+            {/* Edit Controls Toolbar */}
+            <View style={[styles.editCard, { borderColor: palette.border, backgroundColor: palette.surfaceElevated }]}>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>
+                Phase 1B — Targeted Minimal-Change Editing
+              </Text>
+
+              {/* Selection Input (Optional) */}
+              <TextInput
+                value={selectionText}
+                onChangeText={setSelectionText}
+                placeholder="Specific selection to replace (optional — leave empty to edit whole document)..."
+                placeholderTextColor={palette.textMuted}
+                style={[styles.inputBox, { borderColor: palette.border, backgroundColor: palette.surface, color: palette.text, fontSize: 12 }]}
+              />
+
+              {/* Instruction Input */}
+              <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                <TextInput
+                  value={instructionText}
+                  onChangeText={setInstructionText}
+                  placeholder="Exact edit instructions (e.g. 1. change title to X, 2. make para 2 shorter)..."
+                  placeholderTextColor={palette.textMuted}
+                  style={[styles.inputBox, { flex: 1, borderColor: palette.border, backgroundColor: palette.surface, color: palette.text }]}
+                />
+                <TouchableOpacity
+                  disabled={isApplyingEdit || !instructionText.trim()}
+                  onPress={handleApplyEdit}
+                  style={[styles.applyBtn, { backgroundColor: palette.accent, opacity: isApplyingEdit || !instructionText.trim() ? 0.6 : 1 }]}
+                >
+                  {isApplyingEdit ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="flash-outline" size={14} color="#FFFFFF" />
+                      <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 12 }}>Apply</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+
+              {/* Quick Pills */}
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                {[
+                  'Shorten paragraph 2',
+                  'Fix grammar & flow',
+                  'Add executive summary section',
+                  'Format into clean bullets',
+                ].map((chip) => (
+                  <TouchableOpacity
+                    key={chip}
+                    onPress={() => setInstructionText(chip)}
+                    style={[styles.chipBtn, { borderColor: palette.border, backgroundColor: palette.surface }]}
+                  >
+                    <Text style={{ fontSize: 11, color: palette.textSecondary }}>{chip}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Ambiguity or Error Alert */}
+              {editError ? (
+                <View style={[styles.alertBox, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}>
+                  <Ionicons name="help-circle-outline" size={16} color={palette.accent} />
+                  <Text style={{ fontSize: 12, color: palette.text, flex: 1 }}>{editError}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Checklist Verification Breakdown */}
+            {editResponse?.checklist?.length ? (
+              <View style={[styles.checklistCard, { borderColor: palette.border, backgroundColor: palette.surfaceElevated }]}>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: palette.text, marginBottom: 4 }}>
+                  Checklist Verification ({editResponse.checklist.length} items applied)
+                </Text>
+                {editResponse.checklist.map((item) => (
+                  <View key={item.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="checkmark-circle" size={14} color="#059669" />
+                    <Text style={{ fontSize: 12, color: palette.textSecondary }}>
+                      {item.summary || `Done: ${item.instruction}`}
+                    </Text>
+                  </View>
+                ))}
+                {editResponse.unrelated_notes?.map((note, i) => (
+                  <Text key={i} style={{ fontSize: 11, fontStyle: 'italic', color: palette.textMuted }}>
+                    Note (unchanged): {note}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
+
+            {/* Version Actions Bar: Accept / Reject / Undo */}
+            <View style={[styles.versionBar, { borderColor: palette.border }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: palette.text }}>
+                  Version {currentVersionIdx + 1} of {versionHistory.length}
+                </Text>
+                {editResponse?.diff ? (
+                  <Text style={{ fontSize: 11, color: palette.textMuted }}>
+                    (+{editResponse.diff.added_count} / -{editResponse.diff.removed_count})
+                  </Text>
+                ) : null}
+              </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <TouchableOpacity
+                  disabled={currentVersionIdx === 0}
+                  onPress={handleUndo}
+                  style={[styles.actionBtn, { borderColor: palette.border, opacity: currentVersionIdx === 0 ? 0.4 : 1 }]}
+                >
+                  <Ionicons name="arrow-undo-outline" size={13} color={palette.text} />
+                  <Text style={{ fontSize: 11, fontWeight: '600', color: palette.text }}>Undo</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  disabled={versionHistory.length <= 1}
+                  onPress={handleReject}
+                  style={[styles.actionBtn, { borderColor: '#dc2626', opacity: versionHistory.length <= 1 ? 0.4 : 1 }]}
+                >
+                  <Ionicons name="close-circle-outline" size={13} color="#dc2626" />
+                  <Text style={{ fontSize: 11, fontWeight: '600', color: '#dc2626' }}>Reject</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleAccept}
+                  style={[styles.actionBtn, { backgroundColor: '#059669', borderColor: '#059669' }]}
+                >
+                  <Ionicons name="checkmark-circle-outline" size={13} color="#FFFFFF" />
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#FFFFFF' }}>Accept</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Diff Viewer / Preview Switcher */}
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                onPress={() => setDiffViewMode('diff')}
+                style={[styles.viewTab, diffViewMode === 'diff' && { borderColor: palette.accent }]}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '600', color: diffViewMode === 'diff' ? palette.accent : palette.textMuted }}>
+                  Diff View
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setDiffViewMode('preview')}
+                style={[styles.viewTab, diffViewMode === 'preview' && { borderColor: palette.accent }]}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '600', color: diffViewMode === 'preview' ? palette.accent : palette.textMuted }}>
+                  Full Text View
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Diff Content Stage */}
+            <ScrollView contentContainerStyle={{ paddingVertical: 6 }}>
+              {diffViewMode === 'diff' && editResponse?.diff ? (
+                <View style={[styles.diffWrap, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+                  {editResponse.diff.chunks.map((chunk, idx) => {
+                    const isAdded = chunk.type === 'added';
+                    const isRemoved = chunk.type === 'removed';
+                    return (
+                      <View
+                        key={idx}
+                        style={[
+                          styles.diffLine,
+                          isAdded && { backgroundColor: 'rgba(5, 150, 105, 0.12)' },
+                          isRemoved && { backgroundColor: 'rgba(220, 38, 38, 0.12)' },
+                        ]}
+                      >
+                        <Text style={{ width: 16, fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: isAdded ? '#059669' : isRemoved ? '#dc2626' : palette.textMuted }}>
+                          {isAdded ? '+' : isRemoved ? '-' : ' '}
+                        </Text>
+                        <Text
+                          style={{
+                            flex: 1,
+                            fontSize: 12,
+                            fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+                            color: isAdded ? '#059669' : isRemoved ? '#dc2626' : palette.text,
+                            textDecorationLine: isRemoved ? 'line-through' : 'none',
+                          }}
+                        >
+                          {chunk.text}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <MarkdownRenderer content={activeContent} />
+              )}
+            </ScrollView>
+          </View>
+        ) : null}
+
+        {/* PDF View */}
         {tab === 'pdf' ? (
           Platform.OS === 'web' ? (
             loadingPdf ? (
@@ -231,12 +551,13 @@ export function DocumentPreviewModal({ visible, message, inlinePane = false, onC
           ) : (
             <ScrollView contentContainerStyle={styles.paperWrap}>
               <View style={styles.paperPage}>
-                <Text style={styles.paperBody}>{stripInlineMd(message.content)}</Text>
+                <Text style={styles.paperBody}>{stripInlineMd(activeContent)}</Text>
               </View>
             </ScrollView>
           )
         ) : null}
 
+        {/* PPTX View */}
         {tab === 'pptx' && activeSlide ? (
           <View style={styles.slideStage}>
             <View style={styles.slideCard}>
@@ -280,10 +601,11 @@ export function DocumentPreviewModal({ visible, message, inlinePane = false, onC
           </View>
         ) : null}
 
+        {/* Word Document View */}
         {tab === 'docx' ? (
           <ScrollView contentContainerStyle={styles.paperWrap}>
             <View style={styles.paperPage}>
-              {message.content.split('\n').map((raw, idx) => {
+              {activeContent.split('\n').map((raw, idx) => {
                 const line = raw.trim();
                 if (!line) return <View key={idx} style={{ height: 8 }} />;
                 if (line.startsWith('# ')) {
@@ -333,9 +655,9 @@ export function DocumentPreviewModal({ visible, message, inlinePane = false, onC
 
 const styles = StyleSheet.create({
   inlineContainer: {
-    width: '46%',
-    minWidth: 380,
-    maxWidth: 660,
+    width: '48%',
+    minWidth: 400,
+    maxWidth: 720,
     height: '100%',
     borderLeftWidth: 1,
     overflow: 'hidden',
@@ -349,8 +671,8 @@ const styles = StyleSheet.create({
   },
   dialog: {
     width: '100%',
-    maxWidth: 960,
-    height: '86%',
+    maxWidth: 980,
+    height: '88%',
     borderRadius: 16,
     borderWidth: 1,
     overflow: 'hidden',
@@ -432,4 +754,79 @@ const styles = StyleSheet.create({
   docH2: { fontSize: 16, fontWeight: '700', color: '#0D9488', marginTop: 8, marginBottom: 2 },
   docH3: { fontSize: 14, fontWeight: '700', color: '#0F172A', marginTop: 4 },
   paperBody: { fontSize: 13.5, lineHeight: 20, color: '#1E293B' },
+
+  // Phase 1B Styling
+  editCard: {
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    gap: 8,
+  },
+  inputBox: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 13,
+  },
+  applyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 8,
+  },
+  chipBtn: {
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  alertBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  checklistCard: {
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 4,
+  },
+  versionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+  },
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  viewTab: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderBottomWidth: 2,
+    borderColor: 'transparent',
+  },
+  diffWrap: {
+    borderWidth: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  diffLine: {
+    flexDirection: 'row',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
 });

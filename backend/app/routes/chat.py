@@ -155,7 +155,18 @@ def _build_system_instruction(
             "NEVER say you cannot generate those files. When revising an uploaded document or template, preserve "
             "its exact sections, headings, tables, and structure faithfully unless asked to change them. "
             "For presentations, structure each slide clearly with '## Slide 1: <Title>' and concise bullet points "
-            "(separated by '---'). Tell the user to click 'PDF', 'DOCX', or 'PPTX' right below your message."
+            "(separated by '---'). Tell the user to click 'PDF', 'DOCX', or 'PPTX' right below your message.\n\n"
+            "Phase 1B Precise Editing Protocol: When the user asks for edits or revisions on previously generated "
+            "content, documents, code, or selected passages:\n"
+            "1. Split the request into a numbered checklist of individual edit instructions.\n"
+            "2. Apply the Minimal-Change Rule: Change ONLY what was requested. Preserve everything else character-for-character "
+            "(wording, tone, structure, numbering, formatting, headings, code style, and language).\n"
+            "3. Never silently skip an instruction. Verify every checklist item before finishing.\n"
+            "4. Never add, remove, or 'improve' content that was not mentioned. If you notice an unrelated problem, "
+            "mention it in one line at the end and leave it unchanged.\n"
+            "5. If an instruction is ambiguous or could match multiple places, ask one short clarifying question or offer 2-3 options.\n"
+            "6. Honor all constraints exactly (word counts, tone, format, 'keep my wording', 'don't touch headings').\n"
+            "7. Return the full edited result cleanly without conversational chatter inside the edited content body."
         ),
     ]
 

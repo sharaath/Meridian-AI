@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.database import init_db
 from app.middleware.logging import PrivacySafeLoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
-from app.routes import admin, auth, chat, files, image, memory, models, projects, search, user, voice
+from app.routes import admin, auth, chat, edit, files, image, memory, models, projects, search, user, voice
 from app.services.ai_service import ai_registry
 
 
@@ -53,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(user.router)
     app.include_router(admin.router)
+    app.include_router(edit.router)
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request, exc):

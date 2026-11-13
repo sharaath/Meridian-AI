@@ -15,6 +15,8 @@ import {
   UsageStats,
   UserPreferences,
   UserSummary,
+  PreciseEditResponse,
+  VersionHistoryResponse,
 } from '@/types/api';
 
 function resolveApiBaseUrl(): string {
@@ -409,5 +411,36 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ subscription_plan }),
     }),
+
+  // Phase 1B: Precise Editing
+  preciseEdit: (payload: {
+    content: string;
+    instruction: string;
+    constraints?: Record<string, any>;
+    model_id?: string;
+    resource_id?: string;
+  }) => request<PreciseEditResponse>('/api/edit/precise', { method: 'POST', body: JSON.stringify(payload) }),
+
+  selectionEdit: (payload: {
+    full_content: string;
+    selection: string;
+    instruction: string;
+    prefix_context?: string;
+    suffix_context?: string;
+    model_id?: string;
+    resource_id?: string;
+  }) => request<PreciseEditResponse>('/api/edit/selection', { method: 'POST', body: JSON.stringify(payload) }),
+
+  codeEdit: (payload: { code: string; language?: string; instruction: string; model_id?: string }) =>
+    request<PreciseEditResponse>('/api/edit/code', { method: 'POST', body: JSON.stringify(payload) }),
+
+  versionAction: (resource_id: string, version_id: string, action: 'accept' | 'reject' | 'undo') =>
+    request<{ status: string; version?: any; restored_version?: any }>('/api/edit/version/action', {
+      method: 'POST',
+      body: JSON.stringify({ resource_id, version_id, action }),
+    }),
+
+  getVersionHistory: (resource_id: string) =>
+    request<VersionHistoryResponse>(`/api/edit/version/history/${resource_id}`),
 };
 

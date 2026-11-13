@@ -164,6 +164,63 @@ export interface UsageStats {
   }>;
 }
 
+export interface EditChecklistItem {
+  id: number;
+  instruction: string;
+  status: 'done' | 'missed' | 'clarification_needed';
+  summary: string;
+}
+
+export interface DiffChunk {
+  type: 'added' | 'removed' | 'unchanged';
+  text: string;
+  line_number_old?: number | null;
+  line_number_new?: number | null;
+}
+
+export interface DiffSummary {
+  unified_diff: string;
+  added_count: number;
+  removed_count: number;
+  chunks: DiffChunk[];
+}
+
+export interface AmbiguityCheck {
+  is_ambiguous: boolean;
+  clarifying_question?: string | null;
+  options: string[];
+}
+
+export interface PreciseEditResponse {
+  success: boolean;
+  original_text: string;
+  edited_text: string;
+  checklist: EditChecklistItem[];
+  diff: DiffSummary;
+  ambiguity?: AmbiguityCheck | null;
+  unrelated_notes: string[];
+  syntax_valid?: boolean | null;
+  syntax_error?: string | null;
+  version_id?: string | null;
+  version_number: number;
+}
+
+export interface VersionHistoryItem {
+  version_id: string;
+  version_number: number;
+  timestamp: string;
+  instruction: string;
+  content: string;
+  diff_summary?: DiffSummary | null;
+  status: 'current' | 'accepted' | 'rejected' | 'superseded';
+}
+
+export interface VersionHistoryResponse {
+  resource_id: string;
+  current_version_id: string;
+  versions: VersionHistoryItem[];
+}
+
 export interface AdminOverview {
   metrics: {
     total_users: number;

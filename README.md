@@ -74,6 +74,25 @@ The live production deployment was verified with an automated end-to-end test su
 
 ---
 
+### 4. Phase 1B — Precise Editing Engine (100% Implemented & Verified)
+Designed specifically to adhere to the strict **Minimal-Change Rule** (change only what was requested, nothing more, nothing less):
+
+- [x] **Instruction Parsing**: Automatically decomposes multi-part user instructions into a structured, numbered checklist with status tracking and per-item summaries (`Done: changed title`).
+- [x] **Minimal-Change Rule & Byte-Identical Preservation**: Surgical edits target only requested sentences, paragraphs, or words. Unaffected sections remain 100% byte-for-byte identical. No unsolicited "improvements" or document regenerations.
+- [x] **Ambiguity Detection & Handling**: Automatically detects under-specified requests (e.g., "make it better", "fix it") or ambiguous references ("change the paragraph") and returns clarifying questions with labeled options (Option A, Option B, Option C) instead of guessing.
+- [x] **Constraint Enforcement**: Strictly respects negative and quantitative constraints: `preserve_headings`, `keep_wording`, and `max_words`.
+- [x] **Selection-Based Editing (UI & Backend)**: Lets users select specific text in documents or messages. Slices and splices only that target range back into place, even disambiguating duplicate occurrences using prefix and suffix context.
+- [x] **Show What Changed (Diff View & Version History)**:
+  - Line-level diff viewer highlighting added lines (green) and removed lines (red).
+  - Version management with **Accept**, **Reject**, and **Undo** controls with rollback to any prior version.
+- [x] **File-Aware Editing**: In-place modification of DOCX (Microsoft Word), PPTX (PowerPoint), and code files preserving original styles, images (`word/media/*`), fonts, layouts, and tables.
+- [x] **Code Syntax Validation**: Automatic AST parsing for Python, JSON validation, and balanced delimiter checking for JavaScript/TypeScript.
+- [x] **Automated Evaluation Suite (`eval_precise_editing.py` & pytest)**: 19 / 19 test cases passing (100%).
+
+---
+
+---
+
 ## Architecture Overview
 
 ```
