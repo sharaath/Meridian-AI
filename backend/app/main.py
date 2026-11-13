@@ -70,7 +70,7 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/", tags=["System"])
+    @app.api_route("/", methods=["GET", "HEAD"], tags=["System"])
     def root():
         return {
             "status": "ok",
@@ -79,7 +79,7 @@ def create_app() -> FastAPI:
             "docs": "/docs",
         }
 
-    @app.get("/api/health", tags=["System"])
+    @app.api_route("/api/health", methods=["GET", "HEAD"], tags=["System"])
     def health():
         return {
             "status": "ok",
