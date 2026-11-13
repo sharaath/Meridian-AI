@@ -428,6 +428,9 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
           onMeta: (meta) => {
             createdConvId = meta.conversation_id;
             setStreamCitations(meta.citations || []);
+            if (meta.has_summary) {
+              setConv((prev) => (prev ? { ...prev, has_summary: true, summary: meta.summary ?? prev.summary } : prev));
+            }
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === optimisticUser.id
@@ -929,6 +932,21 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             </View>
           ) : (
             <View style={styles.messagesColumn}>
+              {/* Subtle Earlier Messages Summarized Indicator */}
+              {conv?.has_summary ? (
+                <View
+                  style={[
+                    styles.summaryBanner,
+                    { backgroundColor: palette.surfaceElevated, borderColor: palette.border },
+                  ]}
+                >
+                  <Ionicons name="sparkles" size={13} color={palette.accent} />
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: palette.textSecondary }}>
+                    Earlier messages summarized
+                  </Text>
+                </View>
+              ) : null}
+
               {(() => {
                 const { visible: displayMessages, branchInfo } = getVisibleMessages();
                 return displayMessages.map((msg, idx) => {
@@ -1534,6 +1552,17 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 8,
     borderWidth: 1,
+  },
+  summaryBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginBottom: 12,
   },
   citationsBox: {
     marginTop: 10,

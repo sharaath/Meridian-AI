@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS public.conversations (
     model_id TEXT DEFAULT '',
     mode TEXT NOT NULL DEFAULT 'general' CHECK (mode IN ('general', 'coding', 'writing', 'tutor', 'math', 'translation', 'email')),
     is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
+    summary TEXT DEFAULT NULL,
+    has_summary BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -123,6 +125,7 @@ CREATE TABLE IF NOT EXISTS public.usage_logs (
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
     total_tokens INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
     action_type TEXT NOT NULL DEFAULT 'chat',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

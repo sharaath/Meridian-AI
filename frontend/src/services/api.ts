@@ -91,13 +91,17 @@ export interface StreamCallbacks {
     citations: Citation[];
     parent_id?: string | null;
     stream_id?: string;
+    has_summary?: boolean;
+    summary?: string | null;
+    estimated_tokens?: number;
   }) => void;
   onDelta?: (deltaText: string) => void;
   onDone?: (payload: {
     conversation_id: string;
     assistant_message: Message;
     follow_ups: string[];
-    usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; latency_ms?: number };
+    has_summary?: boolean;
   }) => void;
   onError?: (detail: string) => void;
 }

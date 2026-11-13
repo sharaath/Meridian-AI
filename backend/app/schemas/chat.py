@@ -48,6 +48,8 @@ class ConversationOut(BaseModel):
     model_id: str
     mode: str
     is_pinned: bool
+    summary: Optional[str] = None
+    has_summary: bool = False
     created_at: datetime
     updated_at: datetime
 

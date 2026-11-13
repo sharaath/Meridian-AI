@@ -50,6 +50,24 @@ def register_and_auth(client: TestClient, email: str, username: str, password: s
         "/api/auth/register",
         json={"email": email, "username": username, "password": password},
     )
+    if res.status_code == 409:
+        login_res = client.post("/api/auth/login", json={"email": email, "password": password})
+        if login_res.status_code == 200:
+            data = login_res.json()
+            return {
+                "user": data["user"],
+                "token": data["access_token"],
+                "headers": {"Authorization": f"Bearer {data['access_token']}"},
+            }
+        # Handle password reset from previous test run
+        alt_login = client.post("/api/auth/login", json={"email": email, "password": "NewStrongPass456!"})
+        if alt_login.status_code == 200:
+            data = alt_login.json()
+            return {
+                "user": data["user"],
+                "token": data["access_token"],
+                "headers": {"Authorization": f"Bearer {data['access_token']}"},
+            }
     assert res.status_code == 201, res.text
     data = res.json()
     return {

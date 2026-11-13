@@ -84,6 +84,8 @@ export interface Conversation {
   model_id: string;
   mode: AssistantMode;
   is_pinned: boolean;
+  summary?: string | null;
+  has_summary?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -153,6 +155,7 @@ export interface UsageStats {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    avg_latency_ms?: number;
   };
   totals: {
     conversations: number;
@@ -163,6 +166,16 @@ export interface UsageStats {
     model_id: string;
     requests: number;
     total_tokens: number;
+    avg_latency_ms?: number;
+  }>;
+  recent_requests?: Array<{
+    id: string;
+    model_id: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    latency_ms: number;
+    created_at: string;
   }>;
 }
 

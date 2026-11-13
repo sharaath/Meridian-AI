@@ -46,6 +46,8 @@ export default function UsagePage() {
         <View style={styles.grid}>
           {[
             { label: '30-Day Tokens', value: stats.thirty_day_summary.total_tokens.toLocaleString() },
+            { label: 'Input / Output', value: `${(stats.thirty_day_summary.prompt_tokens / 1000).toFixed(1)}k / ${(stats.thirty_day_summary.completion_tokens / 1000).toFixed(1)}k` },
+            { label: 'Avg Latency', value: stats.thirty_day_summary.avg_latency_ms ? `${stats.thirty_day_summary.avg_latency_ms} ms` : '—' },
             { label: '30-Day Requests', value: String(stats.thirty_day_summary.requests) },
             { label: 'Conversations', value: String(stats.totals.conversations) },
             { label: 'Uploaded Files', value: String(stats.totals.files) },

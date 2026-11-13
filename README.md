@@ -113,6 +113,27 @@ Brings the chat interaction, responsiveness, and conversation branching to parit
 
 ---
 
+### 6. Phase 2 — Context Management & Telemetry (100% Implemented & Verified)
+Prevents model context-window exhaustion and maintains crisp conversation history through intelligent compression:
+
+- [x] **Per-Request Token Counting & Estimation**:
+  - Implemented token estimation module (`app.services.context_service.estimate_tokens` and `estimate_history_tokens`) evaluating prompt tokens across multi-turn histories, file attachment extractions, system instructions, and framing envelopes.
+- [x] **Rolling Summarization of Older Turns**:
+  - Context monitor triggers summarization when conversation approaches model context window limits (>= 75%) or exceeds token thresholds (>= 6,000 tokens with 8+ turns).
+  - Summarizes older messages into a structured, factual rolling summary stored in `conversations.summary` (`conversations.has_summary = True`).
+  - Keeps recent conversation turns (last 4 messages / 2 turns) completely verbatim.
+  - Automatically injects the rolling summary into the system instruction `[Earlier conversation summary]: ...` for subsequent turns without prompt bloat.
+- [x] **Subtle "Earlier messages summarized" UI Indicator**:
+  - Sent via SSE `meta` event (`has_summary: true`, `summary: ...`) and returned in `GET /api/conversations/{id}`.
+  - Renders a clean pill indicator (`Earlier messages summarized`) in `ChatWorkspace` directly above verbatim messages.
+- [x] **Per-Request Input/Output Tokens & Latency Logging**:
+  - Added `latency_ms` tracking via high-resolution performance timers (`time.perf_counter()`) on every completion stream.
+  - Logs `prompt_tokens`, `completion_tokens`, `total_tokens`, and `latency_ms` to `usage_logs` table in Supabase PostgreSQL and SQLite.
+  - Enhanced `/api/user/usage` and the frontend usage dashboard to display `30-Day Avg Latency` (in ms), `Input / Output Tokens` breakdown, and recent request logs.
+- [x] **Automated Context Management Test Suite (`backend/tests/test_context_management.py`)**: 5 / 5 automated integration tests passing (100%).
+
+---
+
 ---
 
 ## Architecture Overview

@@ -100,9 +100,18 @@ def get_usage_stats(current_user: User = Depends(get_current_user), db: Session 
             func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
             func.coalesce(func.sum(UsageLog.completion_tokens), 0),
             func.coalesce(func.sum(UsageLog.total_tokens), 0),
+            func.coalesce(func.avg(UsageLog.latency_ms), 0),
         )
         .filter(UsageLog.user_id == current_user.id, UsageLog.created_at >= thirty_days_ago)
         .first()
+    )
+
+    recent_logs = (
+        db.query(UsageLog)
+        .filter(UsageLog.user_id == current_user.id)
+        .order_by(UsageLog.created_at.desc())
+        .limit(10)
+        .all()
     )
 
     by_model_rows = (
@@ -110,6 +119,7 @@ def get_usage_stats(current_user: User = Depends(get_current_user), db: Session 
             UsageLog.model_id,
             func.count(UsageLog.id),
             func.coalesce(func.sum(UsageLog.total_tokens), 0),
+            func.coalesce(func.avg(UsageLog.latency_ms), 0),
         )
         .filter(UsageLog.user_id == current_user.id, UsageLog.created_at >= thirty_days_ago)
         .group_by(UsageLog.model_id)
@@ -140,6 +150,7 @@ def get_usage_stats(current_user: User = Depends(get_current_user), db: Session 
             "prompt_tokens": int(month_totals[1] or 0),
             "completion_tokens": int(month_totals[2] or 0),
             "total_tokens": int(month_totals[3] or 0),
+            "avg_latency_ms": int(month_totals[4] or 0),
         },
         "totals": {
             "conversations": int(total_conversations),
@@ -147,8 +158,25 @@ def get_usage_stats(current_user: User = Depends(get_current_user), db: Session 
             "files": int(total_files),
         },
         "by_model": [
-            {"model_id": r[0] or "unknown", "requests": int(r[1]), "total_tokens": int(r[2])}
+            {
+                "model_id": r[0] or "unknown",
+                "requests": int(r[1]),
+                "total_tokens": int(r[2]),
+                "avg_latency_ms": int(r[3] or 0),
+            }
             for r in by_model_rows
+        ],
+        "recent_requests": [
+            {
+                "id": log.id,
+                "model_id": log.model_id,
+                "prompt_tokens": log.prompt_tokens,
+                "completion_tokens": log.completion_tokens,
+                "total_tokens": log.total_tokens,
+                "latency_ms": log.latency_ms or 0,
+                "created_at": log.created_at.isoformat(),
+            }
+            for log in recent_logs
         ],
     }
 

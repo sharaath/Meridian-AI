@@ -40,11 +40,12 @@ engine = _build_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def _sync_message_columns(target_engine) -> None:
-    """Ensure message tree branching (parent_id) and feedback columns exist."""
+def _sync_schema_columns(target_engine) -> None:
+    """Ensure message tree branching, conversation summary, and usage latency columns exist."""
     try:
         with target_engine.begin() as conn:
             if target_engine.dialect.name == "sqlite":
+                # messages
                 res = conn.execute(text("PRAGMA table_info(messages);")).fetchall()
                 col_names = {row[1] for row in res}
                 if col_names:
@@ -52,9 +53,26 @@ def _sync_message_columns(target_engine) -> None:
                         conn.execute(text("ALTER TABLE messages ADD COLUMN parent_id VARCHAR(36);"))
                     if "feedback" not in col_names:
                         conn.execute(text("ALTER TABLE messages ADD COLUMN feedback VARCHAR(20);"))
+                # conversations
+                res = conn.execute(text("PRAGMA table_info(conversations);")).fetchall()
+                col_names = {row[1] for row in res}
+                if col_names:
+                    if "summary" not in col_names:
+                        conn.execute(text("ALTER TABLE conversations ADD COLUMN summary TEXT;"))
+                    if "has_summary" not in col_names:
+                        conn.execute(text("ALTER TABLE conversations ADD COLUMN has_summary BOOLEAN DEFAULT 0;"))
+                # usage_logs
+                res = conn.execute(text("PRAGMA table_info(usage_logs);")).fetchall()
+                col_names = {row[1] for row in res}
+                if col_names:
+                    if "latency_ms" not in col_names:
+                        conn.execute(text("ALTER TABLE usage_logs ADD COLUMN latency_ms INTEGER DEFAULT 0;"))
             elif target_engine.dialect.name == "postgresql":
                 conn.execute(text("ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS parent_id VARCHAR(36);"))
                 conn.execute(text("ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS feedback VARCHAR(20);"))
+                conn.execute(text("ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS summary TEXT;"))
+                conn.execute(text("ALTER TABLE public.conversations ADD COLUMN IF NOT EXISTS has_summary BOOLEAN DEFAULT FALSE;"))
+                conn.execute(text("ALTER TABLE public.usage_logs ADD COLUMN IF NOT EXISTS latency_ms INTEGER DEFAULT 0;"))
     except Exception as exc:
         import logging
         logging.getLogger("uvicorn.error").debug("Column sync note: %s", exc)
@@ -65,7 +83,7 @@ def init_db() -> None:
     from app.models import tables  # noqa: F401
     try:
         Base.metadata.create_all(bind=engine)
-        _sync_message_columns(engine)
+        _sync_schema_columns(engine)
         if get_settings().is_postgres:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_id_fkey;"))
@@ -88,7 +106,7 @@ def _get_fallback_engine():
             connect_args={"check_same_thread": False},
         )
         Base.metadata.create_all(bind=_fallback_engine)
-        _sync_message_columns(_fallback_engine)
+        _sync_schema_columns(_fallback_engine)
         _fallback_sessionmaker = sessionmaker(autocommit=False, autoflush=False, bind=_fallback_engine)
     return _fallback_sessionmaker
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -51,6 +52,7 @@ from app.services.ai_service import (
 )
 from pathlib import Path
 
+from app.services.context_service import estimate_tokens, manage_conversation_context
 from app.services.document_service import extract_embedded_images
 from app.services.export_service import (
     export_conversation_pdf,
@@ -411,11 +413,28 @@ async def _stream_completion(
         except WebSearchUnavailableError as exc:
             citations = [{"title": "Web search unavailable", "url": "", "snippet": str(exc), "source": "system"}]
 
+    start_time = time.perf_counter()
     system_instruction = _build_system_instruction(db, user, conversation, search_context=search_context)
 
     # Phase 1: Reconstruct history strictly along the active branch up to user_message
     branch_messages = _get_branch_messages(db, conversation.id, user_message)
-    history = _build_history_inputs(db, user.id, branch_messages)
+
+    # Phase 2: Context management & rolling summarization
+    active_branch_messages, rolling_summary, is_summarized, est_tokens = manage_conversation_context(
+        db=db,
+        conversation=conversation,
+        branch_messages=branch_messages,
+        system_instruction=system_instruction,
+        context_window=model.context_window,
+    )
+
+    if is_summarized and rolling_summary:
+        system_instruction = (
+            f"{system_instruction}\n\n"
+            f"[Earlier conversation summary (compressed earlier turns)]:\n{rolling_summary}\n"
+        )
+
+    history = _build_history_inputs(db, user.id, active_branch_messages)
 
     # Register cancellation event for this stream
     stream_id = str(uuid.uuid4())
@@ -433,6 +452,9 @@ async def _stream_completion(
             "parent_id": user_message.parent_id,
             "model_id": model.id,
             "citations": citations,
+            "has_summary": is_summarized,
+            "summary": rolling_summary if is_summarized else None,
+            "estimated_tokens": est_tokens,
         },
     )
 
@@ -475,10 +497,18 @@ async def _stream_completion(
         active_cancellations.pop(conversation.id, None)
         active_cancellations.pop(stream_id, None)
 
-    # Phase 1: Always persist reply — whether full or partial — so nothing is lost on cancel
+    # Phase 1 & 2: Always persist reply — whether full or partial — and compute latency & tokens
     full_text = "".join(accumulated).strip()
     if not full_text:
         full_text = "(Stopped)" if is_cancelled else "(No response generated)"
+
+    latency_ms = max(1, int((time.perf_counter() - start_time) * 1000))
+    if not prompt_tokens:
+        prompt_tokens = est_tokens
+    if not completion_tokens:
+        completion_tokens = estimate_tokens(full_text)
+    if not total_tokens:
+        total_tokens = prompt_tokens + completion_tokens
 
     assistant_msg = Message(
         conversation_id=conversation.id,
@@ -500,6 +530,7 @@ async def _stream_completion(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
+            latency_ms=latency_ms,
             action_type="chat",
         )
     )
@@ -513,6 +544,7 @@ async def _stream_completion(
                 "conversation_id": conversation.id,
                 "assistant_message": MessageOut.model_validate(assistant_msg).model_dump(mode="json"),
                 "partial": True,
+                "has_summary": is_summarized,
             },
         )
         return
@@ -527,7 +559,9 @@ async def _stream_completion(
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
+                "latency_ms": latency_ms,
             },
+            "has_summary": is_summarized,
         },
     )
 

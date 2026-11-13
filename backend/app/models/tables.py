@@ -85,6 +85,8 @@ class Conversation(Base):
     model_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     mode: Mapped[str] = mapped_column(String(32), nullable=False, default="general")
     is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    has_summary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
@@ -206,6 +208,7 @@ class UsageLog(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     action_type: Mapped[str] = mapped_column(String(32), nullable=False, default="chat")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
