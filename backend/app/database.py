@@ -53,11 +53,49 @@ def init_db() -> None:
         logging.getLogger("uvicorn.error").warning("Database table verification deferred: %s", exc)
 
 
+_fallback_engine = None
+_fallback_sessionmaker = None
+
+
+def _get_fallback_engine():
+    global _fallback_engine, _fallback_sessionmaker
+    if _fallback_engine is None:
+        from app.config import BASE_DIR
+        fallback_path = (BASE_DIR / "meridian_prod.db").as_posix()
+        _fallback_engine = create_engine(
+            f"sqlite:///{fallback_path}",
+            connect_args={"check_same_thread": False},
+        )
+        Base.metadata.create_all(bind=_fallback_engine)
+        _fallback_sessionmaker = sessionmaker(autocommit=False, autoflush=False, bind=_fallback_engine)
+    return _fallback_sessionmaker
+
+
 def get_db() -> Generator[Session, None, None]:
-    """FastAPI dependency yielding a scoped SQLAlchemy session."""
-    db = SessionLocal()
+    """FastAPI dependency yielding a scoped SQLAlchemy session with automatic SQLite resilience."""
     try:
+        db = SessionLocal()
+        # Ping connection to verify database is reachable
+        db.connection()
         yield db
+    except Exception as exc:
+        err_msg = str(exc).lower()
+        if any(term in err_msg for term in ["tenant", "enotfound", "operationalerror", "connection to server"]):
+            import logging
+            logging.getLogger("uvicorn.error").warning(
+                "Remote PostgreSQL unreachable (%s). Using automatic local SQLite fallback.", exc
+            )
+            fallback_session_factory = _get_fallback_engine()
+            fallback_db = fallback_session_factory()
+            try:
+                yield fallback_db
+            finally:
+                fallback_db.close()
+        else:
+            raise
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception:
+            pass
 

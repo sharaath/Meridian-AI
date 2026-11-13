@@ -55,14 +55,19 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
 
     @app.exception_handler(Exception)
-    async def global_exception_handler(_request, exc):
+    async def global_exception_handler(request, exc):
         import logging
         import traceback
         logging.getLogger("uvicorn.error").error("Unhandled exception: %s\n%s", exc, traceback.format_exc())
         from fastapi.responses import JSONResponse
+        origin = request.headers.get("origin", "*")
         return JSONResponse(
             status_code=500,
             content={"detail": f"Internal server error: {str(exc)}"},
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+            },
         )
 
     @app.get("/", tags=["System"])
