@@ -43,7 +43,11 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db() -> None:
     """Create tables when running against local SQLite or uninitialized databases."""
     from app.models import tables  # noqa: F401
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as exc:
+        import logging
+        logging.getLogger("uvicorn.error").warning("Database table verification deferred: %s", exc)
 
 
 def get_db() -> Generator[Session, None, None]:

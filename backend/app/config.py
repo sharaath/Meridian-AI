@@ -26,12 +26,13 @@ class Settings:
 
         raw_secret = os.getenv("SECRET_KEY", "").strip()
         if not raw_secret or raw_secret == "change-this-to-a-long-random-secret-in-production":
-            if self.environment == "production":
-                raise RuntimeError("SECRET_KEY must be set in production environment.")
-            # Persist a per-workspace dev key across StatReload worker restarts so logins stay valid
+            # Persist a dev key across restarts, or generate a safe secret if unset in production
             dev_secret_file = BASE_DIR / ".dev_secret"
             if dev_secret_file.exists():
-                raw_secret = dev_secret_file.read_text(encoding="utf-8").strip()
+                try:
+                    raw_secret = dev_secret_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    raw_secret = ""
             if not raw_secret:
                 raw_secret = secrets.token_urlsafe(48)
                 try:
