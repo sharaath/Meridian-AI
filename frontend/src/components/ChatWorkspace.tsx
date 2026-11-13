@@ -27,7 +27,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useChat } from '@/contexts/ChatContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { api } from '@/services/api';
-import { AssistantMode, Citation, ConversationDetail, Message, UploadedFile } from '@/types/api';
+import { AssistantMode, Citation, ConversationDetail, Message, ToolStatusEvent, UploadedFile } from '@/types/api';
 
 const MODES: Array<{ id: AssistantMode; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
   { id: 'general', label: 'General', icon: 'sparkles-outline' },
@@ -108,6 +108,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const [selectedBranches, setSelectedBranches] = useState<Record<string, string>>({});
+  const [toolStatus, setToolStatus] = useState<ToolStatusEvent | null>(null);
 
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -443,7 +444,14 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             setStreamDraft((prev) => prev + delta);
             scrollToBottom();
           },
+          onToolStatus: (st) => {
+            setToolStatus(st);
+            if (st.status === 'completed') {
+              setTimeout(() => setToolStatus(null), 1400);
+            }
+          },
           onDone: async (donePayload) => {
+            setToolStatus(null);
             setStreamDraft('');
             setStreaming(false);
             setMessages((prev) => [...prev, donePayload.assistant_message]);
@@ -461,6 +469,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             scrollToBottom();
           },
           onError: (detail) => {
+            setToolStatus(null);
             setErrorMsg(detail);
             setLastFailedPrompt(prompt);
             setStreaming(false);
@@ -497,8 +506,15 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
         { model_id: selectedModel, use_web_search: useWebSearch, parent_id: parentId },
         {
           onMeta: (meta) => setStreamCitations(meta.citations || []),
+          onToolStatus: (st) => {
+            setToolStatus(st);
+            if (st.status === 'completed') {
+              setTimeout(() => setToolStatus(null), 1400);
+            }
+          },
           onDelta: (delta) => setStreamDraft((prev) => prev + delta),
           onDone: (done) => {
+            setToolStatus(null);
             setStreamDraft('');
             setStreaming(false);
             setMessages((prev) => [...prev, done.assistant_message]);
@@ -511,6 +527,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             setFollowUps(done.follow_ups || []);
           },
           onError: (detail) => {
+            setToolStatus(null);
             setErrorMsg(detail);
             setStreaming(false);
           },
@@ -518,6 +535,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
         controller.signal
       );
     } catch (err: any) {
+      setToolStatus(null);
       if (err?.name !== 'AbortError') setErrorMsg(err?.message || 'Regeneration failed.');
       setStreaming(false);
       setStreamDraft('');
@@ -556,8 +574,15 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
               }));
             }
           },
+          onToolStatus: (st) => {
+            setToolStatus(st);
+            if (st.status === 'completed') {
+              setTimeout(() => setToolStatus(null), 1400);
+            }
+          },
           onDelta: (delta) => setStreamDraft((prev) => prev + delta),
           onDone: (done) => {
+            setToolStatus(null);
             setStreamDraft('');
             setStreaming(false);
             setMessages((prev) => [...prev, done.assistant_message]);
@@ -570,6 +595,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             setFollowUps(done.follow_ups || []);
           },
           onError: (detail) => {
+            setToolStatus(null);
             setErrorMsg(detail);
             setStreaming(false);
           },
@@ -577,6 +603,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
         controller.signal
       );
     } catch (err: any) {
+      setToolStatus(null);
       if (err?.name !== 'AbortError') setErrorMsg(err?.message || 'Edit failed.');
       setStreaming(false);
       setStreamDraft('');
@@ -1253,6 +1280,29 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
                     <Text style={{ fontSize: 13, fontWeight: '700', color: palette.text }}>Meridian</Text>
                     <ActivityIndicator size="small" color={palette.accent} />
                   </View>
+                  {toolStatus ? (
+                    <View style={[styles.toolStatusBadge, { backgroundColor: palette.surface, borderColor: palette.accent }]}>
+                      <Ionicons
+                        name={
+                          toolStatus.tool === 'web_search'
+                            ? 'globe-outline'
+                            : toolStatus.tool === 'read_document'
+                            ? 'document-text-outline'
+                            : 'terminal-outline'
+                        }
+                        size={14}
+                        color={palette.accent}
+                      />
+                      <Text style={{ fontSize: 12.5, fontWeight: '600', color: palette.accent }}>
+                        {toolStatus.message}
+                      </Text>
+                      {toolStatus.status === 'running' ? (
+                        <ActivityIndicator size="small" color={palette.accent} />
+                      ) : (
+                        <Ionicons name="checkmark-circle" size={14} color={palette.accent} />
+                      )}
+                    </View>
+                  ) : null}
                   {streamDraft ? (
                     <MarkdownRenderer content={streamDraft} isStreaming={true} />
                   ) : (
@@ -1552,6 +1602,17 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 8,
     borderWidth: 1,
+  },
+  toolStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+    marginBottom: 10,
   },
   summaryBanner: {
     flexDirection: 'row',

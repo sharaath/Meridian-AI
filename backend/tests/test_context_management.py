@@ -291,3 +291,4 @@ def test_latency_and_usage_logging_per_request(test_client):
         assert body["recent_requests"][0]["latency_ms"] >= 1
     finally:
         ai_registry.providers = orig_providers
+

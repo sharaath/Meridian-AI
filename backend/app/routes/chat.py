@@ -54,6 +54,13 @@ from pathlib import Path
 
 from app.services.context_service import estimate_tokens, manage_conversation_context
 from app.services.document_service import extract_embedded_images
+from app.services.tool_service import (
+    MAX_TOOL_ITERATIONS,
+    TOOL_SYSTEM_PROMPT,
+    dispatch_tool,
+    format_tool_status_message,
+    parse_tool_call,
+)
 from app.services.export_service import (
     export_conversation_pdf,
     export_conversation_txt,
@@ -193,6 +200,9 @@ def _build_system_instruction(
         mem_block = format_memories_for_prompt(memories)
         if mem_block:
             parts.append(mem_block)
+
+    # Phase 3: Tool-use capabilities
+    parts.append(TOOL_SYSTEM_PROMPT)
 
     if search_context:
         parts.append(search_context)
@@ -476,18 +486,100 @@ async def _stream_completion(
     total_tokens = 0
     is_cancelled = False
 
+    current_history = list(history)
+    tool_iterations = 0
+
     try:
-        async for chunk in provider.stream_chat(model_id=model.id, messages=history, config=cfg):
-            if cancel_event.is_set():
-                is_cancelled = True
+        while tool_iterations < MAX_TOOL_ITERATIONS and not is_cancelled:
+            tool_iterations += 1
+            turn_chunks: List[str] = []
+            is_tool_call_turn = False
+            has_yielded_delta = False
+
+            async for chunk in provider.stream_chat(model_id=model.id, messages=current_history, config=cfg):
+                if cancel_event.is_set():
+                    is_cancelled = True
+                    break
+                if chunk.delta:
+                    turn_chunks.append(chunk.delta)
+                    buffered_text = "".join(turn_chunks)
+
+                    if not is_tool_call_turn:
+                        stripped = buffered_text.lstrip()
+                        if any(
+                            stripped.startswith(prefix)
+                            for prefix in ("```tool_call", "<tool_call", '{"tool":', '{"tool" :', "tool_call:", "call:")
+                        ):
+                            is_tool_call_turn = True
+                        elif len(stripped) >= 24:
+                            if not has_yielded_delta:
+                                yield _sse_event("delta", {"text": buffered_text})
+                                has_yielded_delta = True
+                            else:
+                                yield _sse_event("delta", {"text": chunk.delta})
+                    else:
+                        # Inside tool call turn: suppress raw tool JSON from chat prose
+                        pass
+
+                if chunk.done:
+                    prompt_tokens = max(prompt_tokens, chunk.prompt_tokens)
+                    completion_tokens += chunk.completion_tokens
+                    total_tokens = max(total_tokens, chunk.total_tokens)
+
+            if is_cancelled:
                 break
-            if chunk.delta:
-                accumulated.append(chunk.delta)
-                yield _sse_event("delta", {"text": chunk.delta})
-            if chunk.done:
-                prompt_tokens = chunk.prompt_tokens
-                completion_tokens = chunk.completion_tokens
-                total_tokens = chunk.total_tokens
+
+            turn_text = "".join(turn_chunks).strip()
+            parsed_call = parse_tool_call(turn_text)
+
+            if parsed_call:
+                tool_name, tool_args = parsed_call
+                status_msg = format_tool_status_message(tool_name, tool_args)
+
+                # Stream tool status running event
+                yield _sse_event(
+                    "tool_status",
+                    {
+                        "tool": tool_name,
+                        "status": "running",
+                        "message": status_msg,
+                        "iteration": tool_iterations,
+                        "arguments": tool_args,
+                    },
+                )
+
+                # Execute tool with timeout
+                tool_res = await dispatch_tool(db, user.id, tool_name, tool_args)
+                if tool_res.citations:
+                    citations.extend(tool_res.citations)
+
+                # Stream tool status completed event
+                yield _sse_event(
+                    "tool_status",
+                    {
+                        "tool": tool_name,
+                        "status": "completed",
+                        "message": f"Completed {tool_name}",
+                        "iteration": tool_iterations,
+                        "duration_ms": tool_res.duration_ms,
+                    },
+                )
+
+                # Append assistant tool call & tool result to history for next iteration
+                current_history.append(ChatMessageInput(role="assistant", content=turn_text))
+                current_history.append(
+                    ChatMessageInput(
+                        role="user",
+                        content=f"[Tool Result for {tool_name}]:\n{tool_res.output}\n\nBased on this tool result, please continue or formulate your final answer.",
+                    )
+                )
+                continue
+            else:
+                # Normal final response
+                accumulated.append(turn_text)
+                if not has_yielded_delta and turn_text:
+                    yield _sse_event("delta", {"text": turn_text})
+                break
     except (asyncio.CancelledError, GeneratorExit):
         is_cancelled = True
     except AIProviderError as exc:

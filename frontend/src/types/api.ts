@@ -53,6 +53,15 @@ export interface Citation {
   source: string;
 }
 
+export interface ToolStatusEvent {
+  tool: string;
+  status: 'running' | 'completed' | 'failed';
+  message: string;
+  iteration?: number;
+  duration_ms?: number;
+  arguments?: Record<string, unknown>;
+}
+
 export interface MessageAttachmentMeta {
   file_id: string;
   filename: string;

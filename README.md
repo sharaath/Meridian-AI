@@ -134,6 +134,30 @@ Prevents model context-window exhaustion and maintains crisp conversation histor
 
 ---
 
+### 7. Phase 3 — Tool-Use Loop & Streaming Status (100% Implemented & Verified)
+Unifies model capabilities into an autonomous tool-calling loop with timeouts, guardrails, and real-time status streaming:
+
+- [x] **Autonomous Tool-Calling Loop**:
+  - Implemented multi-turn tool calling engine in `backend/app/services/tool_service.py` and `backend/app/routes/chat.py`.
+  - Supports model-invoked tools:
+    1. `web_search`: Live search with DuckDuckGo/Tavily/Serper fallback and citation extraction.
+    2. `read_document`: File-aware reading by filename, stem, or page with user-scoping and 12,000 char safety window.
+    3. `run_python`: Isolated subprocess code execution sandbox for calculations and data processing.
+- [x] **Safety Guardrails & Timeouts**:
+  - Strict **5-iteration cap** (`MAX_TOOL_ITERATIONS = 5`) preventing runaway recursive execution.
+  - Per-tool timeout enforcement: `web_search` (10.0s), `read_document` (5.0s), `run_python` (5.0s).
+  - Python sandbox security filter blocking dangerous imports (`shutil`, `ctypes`, `subprocess`) and filesystem destructive calls (`os.system`, `os.remove`, `os.rmdir`).
+- [x] **Real-Time Tool Status Streaming**:
+  - Emits `event: tool_status` over SSE with payload `{tool, status, message, iteration, duration_ms}`.
+  - Suppresses raw JSON / tool-call blocks from chat prose while executing.
+  - Frontend `ChatWorkspace.tsx` renders animated status badges (`Searching the web for '...'`, `Reading document '...'`, `Executing Python code in sandbox...`) with custom icons and spinners.
+- [x] **Numbered Web Citations**:
+  - Tool results automatically collect web citations and populate `citations_json`.
+  - Inline numbered brackets (`[1]`, `[2]`) in the synthesized response link directly to the original web sources.
+- [x] **Automated Tool Loop Test Suite (`backend/tests/test_tool_loop.py`)**: 14 / 14 automated unit and integration tests passing (100%).
+
+---
+
 ---
 
 ## Architecture Overview

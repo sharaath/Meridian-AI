@@ -160,3 +160,4 @@ def manage_conversation_context(
 
     # Context is within limits
     return branch_messages, conversation.summary, bool(conversation.has_summary), total_tokens
+

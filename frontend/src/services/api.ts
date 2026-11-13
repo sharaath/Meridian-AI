@@ -17,6 +17,7 @@ import {
   UserSummary,
   PreciseEditResponse,
   VersionHistoryResponse,
+  ToolStatusEvent,
 } from '@/types/api';
 
 function resolveApiBaseUrl(): string {
@@ -96,6 +97,7 @@ export interface StreamCallbacks {
     estimated_tokens?: number;
   }) => void;
   onDelta?: (deltaText: string) => void;
+  onToolStatus?: (status: ToolStatusEvent) => void;
   onDone?: (payload: {
     conversation_id: string;
     assistant_message: Message;
@@ -125,6 +127,7 @@ function parseSseBuffer(buffer: string, callbacks: StreamCallbacks): string {
       const data = JSON.parse(dataLine);
       if (eventName === 'meta') callbacks.onMeta?.(data);
       else if (eventName === 'delta') callbacks.onDelta?.(data.text || '');
+      else if (eventName === 'tool_status') callbacks.onToolStatus?.(data);
       else if (eventName === 'done') callbacks.onDone?.(data);
       else if (eventName === 'error') callbacks.onError?.(data.detail || 'Stream error');
     } catch {
@@ -157,7 +160,7 @@ async function streamSsePost(
       let detail = errText;
       try {
         detail = JSON.parse(errText)?.detail || errText;
-      } catch {}
+      } catch { }
       throw new ApiError(res.status, detail || `Stream failed (${res.status})`);
     }
 
@@ -214,7 +217,7 @@ async function streamSsePost(
         let detail = xhr.responseText;
         try {
           detail = JSON.parse(xhr.responseText)?.detail || xhr.responseText;
-        } catch {}
+        } catch { }
         reject(new ApiError(xhr.status, detail));
         return;
       }
