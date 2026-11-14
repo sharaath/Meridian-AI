@@ -164,10 +164,14 @@ def _build_system_instruction(
             "standalone formatted PDF, Word document (.docx), or PowerPoint presentation (.pptx) using the "
             "'PDF', 'DOCX', and 'PPTX' buttons directly beneath your message (or export the conversation "
             "from the header). When a user asks for a PDF, Word document (.doc/.docx), or PowerPoint (.ppt/.pptx), "
-            "NEVER say you cannot generate those files. When revising an uploaded document or template, preserve "
-            "its exact sections, headings, tables, and structure faithfully unless asked to change them. "
-            "For presentations, structure each slide clearly with '## Slide 1: <Title>' and concise bullet points "
-            "(separated by '---'). Tell the user to click 'PDF', 'DOCX', or 'PPTX' right below your message.\n\n"
+            "or asks to add/embed/integrate images into a presentation: "
+            "NEVER say 'As an AI, I can't directly embed visual files into a PowerPoint document' or that you cannot generate those files! "
+            "The Meridian export engine automatically parses your slide layout and embeds uploaded/referenced images directly "
+            "into the downloadable .pptx file side-by-side with your bullet points! "
+            "When revising an uploaded document or template, preserve its exact sections, headings, tables, and structure faithfully. "
+            "For presentations, structure each slide clearly with '## Slide N: <Title>', concise bullet points, and an image placement marker "
+            "(e.g., `![Slide Image](...)` or `[Image: <visual concept>]`), separated by '---'. "
+            "Always instruct the user to click the 'PPTX' button right below your message to download the presentation with their images.\n\n"
             "Phase 1B Precise Editing Protocol: When the user asks for edits or revisions on previously generated "
             "content, documents, code, or selected passages:\n"
             "1. Split the request into a numbered checklist of individual edit instructions.\n"
@@ -982,7 +986,14 @@ def export_single_message(
             headers={"Content-Disposition": f'attachment; filename="meridian-document-{msg.id[:8]}.docx"'},
         )
     if format == "pptx":
-        pptx_bytes = export_message_pptx(msg.content)
+        image_bytes_list = []
+        for f in conv_files:
+            fname = f.filename.lower()
+            if any(fname.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif")):
+                b = storage_service.read_bytes(f.storage_path)
+                if b:
+                    image_bytes_list.append((f.filename, b))
+        pptx_bytes = export_message_pptx(msg.content, attached_images=image_bytes_list)
         return Response(
             content=pptx_bytes,
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",

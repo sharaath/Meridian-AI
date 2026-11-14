@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from pathlib import Path
 from typing import List, Sequence, Tuple
 from xml.sax.saxutils import escape
 
@@ -412,13 +413,18 @@ def _split_slides(content: str, fallback_title: str) -> List[Tuple[str, List[str
     return slides
 
 
-def export_message_pptx(content: str, title: str = "Meridian Presentation") -> bytes:
-    """Build a valid editable PowerPoint (.pptx) OOXML presentation from Markdown slides."""
+def export_message_pptx(
+    content: str,
+    title: str = "Meridian Presentation",
+    attached_images: Optional[List[Tuple[str, bytes]]] = None,
+) -> bytes:
+    """Build a valid editable PowerPoint (.pptx) OOXML presentation from Markdown slides with optional embedded images."""
     slides = _split_slides(content, title)
 
     slide_overrides = []
     slide_rels_entries = []
     sld_id_entries = []
+    images = attached_images or []
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -433,6 +439,32 @@ def export_message_pptx(content: str, title: str = "Meridian Presentation") -> b
                 f'Target="slides/slide{idx}.xml"/>'
             )
             sld_id_entries.append(f'<p:sldId id="{255 + idx}" r:id="rId{idx + 1}"/>')
+
+            # Optional slide image embedding
+            slide_img_rel = ""
+            pic_xml = ""
+            if images and (idx - 1) < len(images):
+                img_filename, img_bytes = images[idx - 1]
+                ext = Path(img_filename).suffix.lstrip(".").lower() or "png"
+                if ext not in ("png", "jpg", "jpeg", "webp", "gif"):
+                    ext = "png"
+                img_path = f"ppt/media/image{idx}.{ext}"
+                zf.writestr(img_path, img_bytes)
+                slide_img_rel = (
+                    f'<Relationship Id="rId2" '
+                    'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+                    f'Target="../media/image{idx}.{ext}"/>'
+                )
+                pic_xml = (
+                    f'<p:pic><p:nvPicPr><p:cNvPr id="{10 + idx}" name="SlidePicture{idx}"/>'
+                    '<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
+                    '<p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>'
+                    '<p:spPr><a:xfrm><a:off x="6400000" y="1650000"/><a:ext cx="5100000" cy="4500000"/></a:xfrm>'
+                    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
+                )
+
+            # Two-column layout if image present, full width if text only
+            content_cx = "5300000" if pic_xml else "10820400"
 
             body_paragraphs = "".join(
                 "<a:p><a:pPr marL=\"0\" indent=\"0\"><a:spcAft><a:spcPts val=\"800\"/></a:spcAft></a:pPr>"
@@ -467,9 +499,10 @@ def export_message_pptx(content: str, title: str = "Meridian Presentation") -> b
                 # Body box
                 "<p:sp><p:nvSpPr><p:cNvPr id=\"4\" name=\"Content\"/><p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr>"
                 "<p:nvPr><p:ph idx=\"1\"/></p:nvPr></p:nvSpPr>"
-                "<p:spPr><a:xfrm><a:off x=\"685800\" y=\"1650000\"/><a:ext cx=\"10820400\" cy=\"4650000\"/></a:xfrm>"
+                f"<p:spPr><a:xfrm><a:off x=\"685800\" y=\"1650000\"/><a:ext cx=\"{content_cx}\" cy=\"4650000\"/></a:xfrm>"
                 "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr>"
                 f"<p:txBody><a:bodyPr wrap=\"square\"/><a:lstStyle/>{body_paragraphs}</p:txBody></p:sp>"
+                f"{pic_xml}"
                 "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"
             )
             zf.writestr(f"ppt/slides/slide{idx}.xml", slide_xml)
@@ -480,6 +513,7 @@ def export_message_pptx(content: str, title: str = "Meridian Presentation") -> b
                 '<Relationship Id="rId1" '
                 'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" '
                 'Target="../slideLayouts/slideLayout1.xml"/>'
+                f"{slide_img_rel}"
                 "</Relationships>",
             )
 
@@ -489,6 +523,11 @@ def export_message_pptx(content: str, title: str = "Meridian Presentation") -> b
             '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
             '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
             '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Default Extension="png" ContentType="image/png"/>'
+            '<Default Extension="jpg" ContentType="image/jpeg"/>'
+            '<Default Extension="jpeg" ContentType="image/jpeg"/>'
+            '<Default Extension="webp" ContentType="image/webp"/>'
+            '<Default Extension="gif" ContentType="image/gif"/>'
             '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>'
             '<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>'
             '<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>'
