@@ -33,12 +33,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const stored = await AsyncStorage.getItem(TOKEN_STORAGE_KEY);
-        if (stored) {
-          setApiToken(stored);
-          setToken(stored);
-          const profile = await api.me();
-          setUser(profile);
+        let activeToken: string | null = null;
+        let incomingUser: UserSummary | null = null;
+
+        // Check if returning from OAuth redirect with access_token or code in URL
+        if (typeof window !== 'undefined' && window.location) {
+          const hash = window.location.hash || '';
+          const search = window.location.search || '';
+
+          if (hash.includes('access_token=')) {
+            const params = new URLSearchParams(hash.replace(/^#/, ''));
+            activeToken = params.get('access_token');
+          } else if (search.includes('access_token=')) {
+            const params = new URLSearchParams(search.replace(/^\?/, ''));
+            activeToken = params.get('access_token');
+          } else if (search.includes('code=')) {
+            const params = new URLSearchParams(search.replace(/^\?/, ''));
+            const code = params.get('code');
+            if (code) {
+              try {
+                const exchange = await api.exchangeOAuthCode(code);
+                activeToken = exchange.access_token;
+                incomingUser = exchange.user;
+              } catch (exchangeErr) {
+                console.warn('OAuth code exchange failed:', exchangeErr);
+              }
+            }
+          }
+
+          if (activeToken) {
+            await AsyncStorage.setItem(TOKEN_STORAGE_KEY, activeToken);
+            window.history.replaceState(null, '', window.location.pathname);
+          }
+        }
+
+        if (!activeToken) {
+          activeToken = await AsyncStorage.getItem(TOKEN_STORAGE_KEY);
+        }
+
+        if (activeToken) {
+          setApiToken(activeToken);
+          setToken(activeToken);
+          if (incomingUser) {
+            setUser(incomingUser);
+          } else {
+            const profile = await api.me();
+            setUser(profile);
+          }
         }
       } catch {
         setApiToken(null);

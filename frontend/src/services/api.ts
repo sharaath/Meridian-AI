@@ -271,6 +271,11 @@ export const api = {
     }),
   googleOAuthUrl: (redirectTo: string) =>
     request<{ url: string }>(`/api/auth/oauth/google?redirect_to=${encodeURIComponent(redirectTo)}`),
+  exchangeOAuthCode: (code: string) =>
+    request<AuthResponse>('/api/auth/oauth/exchange', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
 
   // Models
   listModels: () => request<{ models: AIModelInfo[]; default_model: string | null; any_configured: boolean }>('/api/models'),

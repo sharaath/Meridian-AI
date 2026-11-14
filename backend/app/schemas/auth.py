@@ -51,3 +51,8 @@ class AuthResponse(BaseModel):
     user: UserSummary
     verification_notice: Optional[str] = None
 
+
+class OAuthExchangeRequest(BaseModel):
+    code: str = Field(..., min_length=1)
+
+

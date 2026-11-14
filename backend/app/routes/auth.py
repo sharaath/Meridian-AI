@@ -17,6 +17,7 @@ from app.models.tables import User, UserPreference
 from app.schemas.auth import (
     AuthResponse,
     LoginRequest,
+    OAuthExchangeRequest,
     PasswordResetConfirmRequest,
     PasswordResetRequest,
     RegisterRequest,
@@ -302,4 +303,52 @@ def google_oauth_url(redirect_to: str = "http://localhost:8081/login"):
         return {"url": res.url}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to initialize Google OAuth: {exc}")
+
+
+@router.post("/oauth/exchange", response_model=AuthResponse)
+def exchange_oauth_code(payload: OAuthExchangeRequest, db: Session = Depends(get_db)):
+    """Exchange PKCE code from OAuth provider redirect for an authenticated session."""
+    settings = get_settings()
+    if not settings.is_supabase_auth_configured:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Google Sign-In requires Supabase Auth configuration (SUPABASE_URL and SUPABASE_ANON_KEY).",
+        )
+    try:
+        from supabase import create_client
+
+        client = create_client(settings.supabase_url, settings.supabase_anon_key)
+        resp = client.auth.exchange_code_for_session({"auth_code": payload.code})
+        if not resp.session or not resp.user:
+            raise HTTPException(status_code=400, detail="Failed to exchange OAuth code for user session.")
+
+        email = (resp.user.email or f"{resp.user.id}@users.local").lower()
+        user = db.query(User).filter(User.id == str(resp.user.id)).first()
+        if not user:
+            user = db.query(User).filter(User.email == email).first()
+
+        if not user:
+            username = (resp.user.user_metadata or {}).get("username") or email.split("@")[0]
+            user = User(
+                id=str(resp.user.id),
+                email=email,
+                username=username,
+                password_hash="",
+                email_verified=bool(getattr(resp.user, "email_confirmed_at", True)),
+            )
+            db.add(user)
+            db.flush()
+            db.add(UserPreference(user_id=user.id))
+            db.commit()
+            db.refresh(user)
+
+        return AuthResponse(
+            access_token=resp.session.access_token,
+            auth_provider="supabase",
+            user=UserSummary.model_validate(user),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"OAuth exchange failed: {exc}")
 
