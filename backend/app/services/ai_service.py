@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -11,6 +13,8 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 import httpx
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class AIProviderError(Exception):
@@ -175,8 +179,20 @@ class GeminiProvider(BaseAIProvider):
         ),
     ]
 
+    def _get_api_keys(self) -> List[str]:
+        raw = get_settings().gemini_api_key or ""
+        backup = os.getenv("GEMINI_BACKUP_API_KEY", "").strip()
+        keys: List[str] = []
+        for part in raw.replace("\n", ",").split(","):
+            cleaned = part.strip()
+            if cleaned and cleaned not in keys:
+                keys.append(cleaned)
+        if backup and backup not in keys:
+            keys.append(backup)
+        return keys
+
     def is_configured(self) -> bool:
-        return bool(get_settings().gemini_api_key)
+        return bool(self._get_api_keys())
 
     def list_models(self) -> List[AIModelInfo]:
         configured = self.is_configured()
@@ -224,8 +240,8 @@ class GeminiProvider(BaseAIProvider):
         messages: List[ChatMessageInput],
         config: AIGenerationConfig,
     ) -> AsyncIterator[AIStreamChunk]:
-        api_key = get_settings().gemini_api_key
-        if not api_key:
+        api_keys = self._get_api_keys()
+        if not api_keys:
             raise AIProviderNotConfiguredError(
                 "Gemini API is not configured. Set GEMINI_API_KEY in backend/.env to enable Gemini models."
             )
@@ -233,7 +249,6 @@ class GeminiProvider(BaseAIProvider):
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
         contents = self._build_contents(messages)
         gen_config = types.GenerateContentConfig(
             system_instruction=config.system_instruction or None,
@@ -242,45 +257,69 @@ class GeminiProvider(BaseAIProvider):
             top_p=config.top_p,
         )
 
-        prompt_tokens = 0
-        completion_tokens = 0
-        total_tokens = 0
+        last_error = None
+        for key_idx, key in enumerate(api_keys):
+            client = genai.Client(api_key=key, http_options={"api_version": "v1beta"})
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
 
-        try:
-            stream = await client.aio.models.generate_content_stream(
-                model=model_id,
-                contents=contents,
-                config=gen_config,
-            )
-            async for chunk in stream:
-                text = getattr(chunk, "text", None) or ""
-                usage = getattr(chunk, "usage_metadata", None)
-                if usage:
-                    prompt_tokens = getattr(usage, "prompt_token_count", prompt_tokens) or prompt_tokens
-                    completion_tokens = getattr(usage, "candidates_token_count", completion_tokens) or completion_tokens
-                    total_tokens = getattr(usage, "total_token_count", total_tokens) or total_tokens
-                if text:
-                    yield AIStreamChunk(delta=text)
+            try:
+                stream = await client.aio.models.generate_content_stream(
+                    model=model_id,
+                    contents=contents,
+                    config=gen_config,
+                )
+                async for chunk in stream:
+                    text = getattr(chunk, "text", None) or ""
+                    usage = getattr(chunk, "usage_metadata", None)
+                    if usage:
+                        prompt_tokens = getattr(usage, "prompt_token_count", prompt_tokens) or prompt_tokens
+                        completion_tokens = getattr(usage, "candidates_token_count", completion_tokens) or completion_tokens
+                        total_tokens = getattr(usage, "total_token_count", total_tokens) or total_tokens
+                    if text:
+                        yield AIStreamChunk(delta=text)
 
-            yield AIStreamChunk(
-                done=True,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens or (prompt_tokens + completion_tokens),
-            )
-        except Exception as exc:
-            raise AIProviderError(f"Gemini API error: {exc}") from exc
+                yield AIStreamChunk(
+                    done=True,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens or (prompt_tokens + completion_tokens),
+                )
+                return
+            except Exception as exc:
+                err_msg = str(exc)
+                last_error = exc
+                is_quota = "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "Quota exceeded" in err_msg
+                if is_quota and key_idx < len(api_keys) - 1:
+                    logger.warning(
+                        f"Gemini API key {key_idx + 1}/{len(api_keys)} hit 429 quota. Rotating to next key..."
+                    )
+                    continue
+
+                if is_quota:
+                    raise AIProviderError(
+                        "⚠️ Gemini API Daily Free Tier Quota Exceeded (20 requests/day limit on Gemini 2.5 Flash reached).\n\n"
+                        "To continue immediately without waiting for the 24-hour reset:\n"
+                        "1. Create a free API key at Google AI Studio: https://aistudio.google.com/app/apikey\n"
+                        "2. In your Render Dashboard (Environment settings), update the GEMINI_API_KEY environment variable with your new key (or provide multiple keys separated by commas: GEMINI_API_KEY=key1,key2)."
+                    ) from exc
+
+                raise AIProviderError(f"Gemini API error: {exc}") from exc
+
+        if last_error:
+            raise AIProviderError(f"Gemini API error: {last_error}") from last_error
 
     async def transcribe_audio(self, model_id: str, audio_bytes: bytes, mime_type: str) -> str:
-        api_key = get_settings().gemini_api_key
-        if not api_key:
+        api_keys = self._get_api_keys()
+        if not api_keys:
             raise AIProviderNotConfiguredError(
                 "Gemini API is not configured. Set GEMINI_API_KEY in backend/.env to transcribe audio."
             )
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
+        client = genai.Client(api_key=api_keys[0], http_options={"api_version": "v1beta"})
         response = await client.aio.models.generate_content(
             model=model_id or "gemini-2.5-flash",
             contents=[
