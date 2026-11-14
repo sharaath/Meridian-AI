@@ -42,6 +42,25 @@ def _verify_with_supabase(token: str) -> Optional[dict]:
                     "email_confirmed_at": getattr(resp.user, "email_confirmed_at", None),
                 }
         except Exception:
+            pass
+
+        try:
+            import httpx
+
+            r = httpx.get(
+                f"{settings.supabase_url}/auth/v1/user",
+                headers={"apikey": settings.supabase_anon_key, "Authorization": f"Bearer {token}"},
+                timeout=5.0,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                return {
+                    "sub": str(data.get("id")),
+                    "email": data.get("email") or "",
+                    "user_metadata": data.get("user_metadata") or {},
+                    "email_confirmed_at": data.get("email_confirmed_at"),
+                }
+        except Exception:
             return None
     return None
 

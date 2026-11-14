@@ -58,17 +58,31 @@ export default function LoginPage() {
     try {
       const redirectTo =
         Platform.OS === 'web' && typeof window !== 'undefined' ? `${window.location.origin}/login` : 'meridian://chat';
-      const { challenge } = await createAndStorePkce();
-      const { url } = await api.googleOAuthUrl(redirectTo, challenge);
-      if (url) {
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.location.assign(url);
-        } else {
-          await Linking.openURL(url);
+
+      // Direct authorize URL without code_challenge ensures Supabase returns the session token
+      // in the URL hash (#access_token=...), completely avoiding PKCE code verifier mismatches.
+      let targetUrl = `https://ocqnzkjcffaicqhymwvm.supabase.co/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}`;
+      try {
+        const res = await api.googleOAuthUrl(redirectTo);
+        if (res && res.url) {
+          const parsed = new URL(res.url);
+          parsed.searchParams.delete('code_challenge');
+          parsed.searchParams.delete('code_challenge_method');
+          parsed.searchParams.set('provider', 'google');
+          parsed.searchParams.set('redirect_to', redirectTo);
+          targetUrl = parsed.toString();
         }
+      } catch {
+        // Fallback to direct Supabase authorization endpoint
+      }
+
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.location.assign(targetUrl);
+      } else {
+        await Linking.openURL(targetUrl);
       }
     } catch (err: any) {
-      setError(err.message || 'Google Sign-In is not configured on this server.');
+      setError(err.message || 'Google Sign-In failed.');
       setGoogleLoading(false);
     }
   };
