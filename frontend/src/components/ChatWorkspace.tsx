@@ -473,14 +473,21 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
             setErrorMsg(detail);
             setLastFailedPrompt(prompt);
             setStreaming(false);
+            if (detail.includes('Conversation not found')) {
+              router.replace('/(app)/chat' as never);
+            }
           },
         },
         controller.signal
       );
     } catch (err: any) {
       if (err?.name !== 'AbortError') {
-        setErrorMsg(err?.message || 'Failed to get AI response.');
+        const msg = err?.message || 'Failed to get AI response.';
+        setErrorMsg(msg);
         setLastFailedPrompt(prompt);
+        if (msg.includes('Conversation not found')) {
+          router.replace('/(app)/chat' as never);
+        }
       }
       setStreaming(false);
       setStreamDraft('');

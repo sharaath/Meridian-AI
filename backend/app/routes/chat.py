@@ -685,10 +685,15 @@ async def stream_chat(
     except AIProviderError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    conv = None
     if payload.conversation_id:
-        conv = _get_owned_conversation(db, payload.conversation_id, current_user.id)
-        conv.mode = payload.mode
-    else:
+        conv = (
+            db.query(Conversation)
+            .filter(Conversation.id == payload.conversation_id, Conversation.user_id == current_user.id)
+            .first()
+        )
+    if not conv:
+        # Gracefully auto-create conversation if stale or missing, preserving user experience without 404
         conv = Conversation(
             user_id=current_user.id,
             project_id=payload.project_id or None,
@@ -699,6 +704,8 @@ async def stream_chat(
         db.add(conv)
         db.commit()
         db.refresh(conv)
+    else:
+        conv.mode = payload.mode
 
     # Determine parent_id for message branching tree
     parent_id = payload.parent_id
