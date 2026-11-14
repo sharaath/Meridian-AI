@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
@@ -19,13 +19,20 @@ import { api } from '@/services/api';
 
 export default function LoginPage() {
   const { palette } = useTheme();
-  const { login } = useAuth();
+  const { user, loading, login } = useAuth();
   const router = useRouter();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!loading && user) {
+      router.replace('/(app)/chat' as never);
+    }
+  }, [user, loading, router]);
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -36,7 +43,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await login(email.trim(), password);
-      router.replace('/chat' as never);
+      router.replace('/(app)/chat' as never);
     } catch (err: any) {
       setError(err.message || 'Sign in failed.');
     } finally {
@@ -46,6 +53,7 @@ export default function LoginPage() {
 
   const handleGoogleSignIn = async () => {
     setError(null);
+    setGoogleLoading(true);
     try {
       const redirectTo =
         Platform.OS === 'web' && typeof window !== 'undefined' ? `${window.location.origin}/login` : 'meridian://chat';
@@ -56,13 +64,14 @@ export default function LoginPage() {
           .replace(/&code_challenge=[^&]+/, '')
           .replace(/&code_challenge_method=[^&]+/, '');
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.location.href = cleanUrl;
+          window.location.assign(cleanUrl);
         } else {
           await Linking.openURL(cleanUrl);
         }
       }
     } catch (err: any) {
       setError(err.message || 'Google Sign-In is not configured on this server.');
+      setGoogleLoading(false);
     }
   };
 
@@ -121,10 +130,17 @@ export default function LoginPage() {
 
         <TouchableOpacity
           onPress={handleGoogleSignIn}
+          disabled={googleLoading || submitting}
           style={[styles.googleBtn, { borderColor: palette.border, backgroundColor: palette.bg }]}
         >
-          <Ionicons name="logo-google" size={17} color={palette.text} />
-          <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>Continue with Google</Text>
+          {googleLoading ? (
+            <ActivityIndicator size="small" color={palette.accent} />
+          ) : (
+            <>
+              <Ionicons name="logo-google" size={17} color={palette.text} />
+              <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text }}>Continue with Google</Text>
+            </>
+          )}
         </TouchableOpacity>
 
         <View style={styles.footerRow}>
