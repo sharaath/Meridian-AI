@@ -58,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               } catch (exchangeErr) {
                 console.warn('OAuth code exchange failed:', exchangeErr);
               }
+              window.history.replaceState(null, '', window.location.pathname);
             }
           }
 

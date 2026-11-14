@@ -51,10 +51,14 @@ export default function LoginPage() {
         Platform.OS === 'web' && typeof window !== 'undefined' ? `${window.location.origin}/login` : 'meridian://chat';
       const { url } = await api.googleOAuthUrl(redirectTo);
       if (url) {
+        // Strip code_challenge so Supabase uses direct token grant in URL hash without PKCE mismatch
+        const cleanUrl = url
+          .replace(/&code_challenge=[^&]+/, '')
+          .replace(/&code_challenge_method=[^&]+/, '');
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.location.href = url;
+          window.location.href = cleanUrl;
         } else {
-          await Linking.openURL(url);
+          await Linking.openURL(cleanUrl);
         }
       }
     } catch (err: any) {
