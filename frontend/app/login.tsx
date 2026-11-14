@@ -48,10 +48,14 @@ export default function LoginPage() {
     setError(null);
     try {
       const redirectTo =
-        Platform.OS === 'web' && typeof window !== 'undefined' ? `${window.location.origin}/chat` : 'meridian://chat';
+        Platform.OS === 'web' && typeof window !== 'undefined' ? `${window.location.origin}/login` : 'meridian://chat';
       const { url } = await api.googleOAuthUrl(redirectTo);
       if (url) {
-        await Linking.openURL(url);
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.location.href = url;
+        } else {
+          await Linking.openURL(url);
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Google Sign-In is not configured on this server.');
