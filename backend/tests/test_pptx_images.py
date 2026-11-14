@@ -58,3 +58,22 @@ def test_export_pptx_with_embedded_images():
     # Slide 2 XML contains <p:pic>
     slide2 = zf.read("ppt/slides/slide2.xml").decode("utf-8")
     assert "<p:pic>" in slide2
+
+
+def test_export_pptx_with_markdown_image_tags():
+    content = """## Slide 1: Solar Power
+![Solar Energy](https://example.com/solar.jpg)
+- Clean renewable source
+- Photovoltaic cells
+---
+## Slide 2: Wind Power
+- Wind turbines
+- Off-shore generation
+"""
+    # Should not raise exception and should build valid PPTX
+    pptx_bytes = export_message_pptx(content)
+    zf = zipfile.ZipFile(io.BytesIO(pptx_bytes))
+    names = zf.namelist()
+    assert "ppt/slides/slide1.xml" in names
+    assert "ppt/slides/slide2.xml" in names
+
