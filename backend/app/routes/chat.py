@@ -553,7 +553,13 @@ async def _stream_completion(
                 )
 
                 # Execute tool with timeout
-                tool_res = await dispatch_tool(db, user.id, tool_name, tool_args)
+                tool_res = await dispatch_tool(
+                    db,
+                    user.id,
+                    tool_name,
+                    tool_args,
+                    conversation_id=conversation.id,
+                )
                 if tool_res.citations:
                     citations.extend(tool_res.citations)
 

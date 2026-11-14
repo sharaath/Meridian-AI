@@ -13,9 +13,11 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote_plus
 from sqlalchemy.orm import Session
 
 from app.models.tables import UploadedFile
@@ -31,6 +33,7 @@ MAX_TOOL_ITERATIONS = 5
 TOOL_TIMEOUT_SEARCH = 10.0
 TOOL_TIMEOUT_DOC = 5.0
 TOOL_TIMEOUT_PYTHON = 5.0
+TOOL_TIMEOUT_IMAGE = 15.0
 
 
 @dataclass
@@ -50,12 +53,15 @@ TOOL_SYSTEM_PROMPT = """You have access to the following tools:
    Arguments: {"filename": string, "page": int (optional)}
 3. `run_python`: Execute Python code in a safe sandbox for calculations, math, data processing, or algorithmic verification.
    Arguments: {"code": string}
+4. `generate_image`: Create an AI-generated image to illustrate content, topics, slides, or visual requests.
+   Arguments: {"prompt": string (detailed visual description), "caption": string (optional short title)}
 
 To call a tool, format your output with a tool_call block:
 ```tool_call
 {"tool": "<tool_name>", "arguments": {<arguments>}}
 ```
 When you invoke a tool, output ONLY the tool call block and wait for the system to return the result.
+When using `generate_image`, always embed the resulting markdown image tag in your response or slide so the user can view it and it is included in PPTX exports!
 When using facts from web_search in your final answer, cite your sources using numbered brackets like [1], [2] corresponding to the search citations.
 """
 
@@ -335,11 +341,98 @@ def execute_run_python(code: str, timeout: float = TOOL_TIMEOUT_PYTHON) -> ToolE
         )
 
 
+async def execute_generate_image(
+    db: Session,
+    user_id: str,
+    conversation_id: Optional[str],
+    prompt: str,
+    caption: str = "",
+) -> ToolExecutionResult:
+    """Generate an AI image via free inference, save to storage service, and record as UploadedFile."""
+    start = time.perf_counter()
+    clean_prompt = prompt.strip()
+    if not clean_prompt:
+        return ToolExecutionResult(
+            tool="generate_image",
+            output="Error: Empty image prompt provided.",
+            success=False,
+            error="Empty prompt",
+            duration_ms=0,
+        )
+
+    clean_caption = caption.strip() or clean_prompt[:40]
+    encoded = quote_plus(clean_prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=600&nologo=true"
+
+    try:
+        import httpx
+        from app.services.storage_service import storage_service
+
+        async with httpx.AsyncClient(timeout=TOOL_TIMEOUT_IMAGE) as client:
+            resp = await client.get(url, headers={"User-Agent": "MeridianAI/1.0"})
+            if resp.status_code != 200 or not resp.content:
+                return ToolExecutionResult(
+                    tool="generate_image",
+                    output=f"Image generator returned HTTP {resp.status_code}.",
+                    success=False,
+                    error=f"HTTP {resp.status_code}",
+                    duration_ms=int((time.perf_counter() - start) * 1000),
+                )
+            img_bytes = resp.content
+
+        # Save to storage service
+        file_id = str(uuid.uuid4())
+        safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_caption)[:30].strip("_") or "image"
+        filename = f"{safe_name}.jpg"
+        storage_path = f"users/{user_id}/images/{file_id}/{filename}"
+        storage_service.write_bytes(storage_path, img_bytes)
+
+        # Record in database
+        uploaded = UploadedFile(
+            id=file_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            filename=filename,
+            file_type="image",
+            mime_type="image/jpeg",
+            storage_path=storage_path,
+            file_size=len(img_bytes),
+        )
+        db.add(uploaded)
+        db.commit()
+        db.refresh(uploaded)
+
+        duration = int((time.perf_counter() - start) * 1000)
+        md_tag = f"![{clean_caption}](/api/files/{uploaded.id}/raw)"
+        return ToolExecutionResult(
+            tool="generate_image",
+            output=(
+                f"Image generated successfully!\n"
+                f"Markdown Tag: {md_tag}\n"
+                f"Filename: {filename}\n"
+                f"File ID: {uploaded.id}\n"
+                f"Direct URL: /api/files/{uploaded.id}/raw\n"
+                f"Instruction: Embed `{md_tag}` directly into your slide/response so the user sees it and it is included in PPTX export."
+            ),
+            success=True,
+            duration_ms=duration,
+        )
+    except Exception as exc:
+        return ToolExecutionResult(
+            tool="generate_image",
+            output=f"Image generation failed: {exc}",
+            success=False,
+            error=str(exc),
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
+
+
 async def dispatch_tool(
     db: Session,
     user_id: str,
     tool_name: str,
     arguments: Dict[str, Any],
+    conversation_id: Optional[str] = None,
 ) -> ToolExecutionResult:
     """Dispatch a tool call to the corresponding executor."""
     name = tool_name.strip().lower()
@@ -358,9 +451,20 @@ async def dispatch_tool(
         code = str(arguments.get("code", ""))
         return execute_run_python(code)
 
+    elif name == "generate_image":
+        prompt = str(arguments.get("prompt", ""))
+        caption = str(arguments.get("caption", ""))
+        return await execute_generate_image(
+            db=db,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
+            caption=caption,
+        )
+
     return ToolExecutionResult(
         tool=tool_name,
-        output=f"Unknown tool '{tool_name}'. Available tools: web_search, read_document, run_python.",
+        output=f"Unknown tool '{tool_name}'. Available tools: web_search, read_document, run_python, generate_image.",
         success=False,
         error="Unknown tool",
         duration_ms=0,
@@ -378,5 +482,8 @@ def format_tool_status_message(tool_name: str, arguments: Dict[str, Any]) -> str
         return f"Reading document '{f}'..." if f else "Reading document..."
     elif name == "run_python":
         return "Executing Python code in sandbox..."
+    elif name == "generate_image":
+        caption = arguments.get("caption") or arguments.get("prompt", "")
+        return f"Generating image: '{caption[:40]}'..." if caption else "Generating image..."
     return f"Running {tool_name}..."
 

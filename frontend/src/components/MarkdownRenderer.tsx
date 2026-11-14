@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -332,6 +332,49 @@ export function MarkdownRenderer({
                     <Text selectable style={{ flex: 1, fontSize: 15, lineHeight: 22, color: fg }}>
                       {renderInline(numMatch[2], fg, palette.accent, palette.surfaceElevated)}
                     </Text>
+                  </View>
+                );
+              }
+
+              const imgMatch = trimmed.match(/^!\[(.*?)\]\((.*?)\)$/);
+              if (imgMatch) {
+                const alt = imgMatch[1];
+                let src = imgMatch[2];
+                if (src.startsWith('/')) {
+                  const base = process.env.EXPO_PUBLIC_API_URL || 'https://meridian-ai-vvvv.onrender.com';
+                  src = `${base}${src}`;
+                }
+                return (
+                  <View
+                    key={lIdx}
+                    style={{
+                      marginVertical: 10,
+                      borderRadius: 14,
+                      overflow: 'hidden',
+                      borderWidth: 1,
+                      borderColor: palette.border,
+                      backgroundColor: palette.surfaceElevated,
+                    }}
+                  >
+                    <Image
+                      source={{ uri: src }}
+                      style={{ width: '100%', height: 260, backgroundColor: palette.surfaceElevated }}
+                      resizeMode="cover"
+                    />
+                    {alt ? (
+                      <Text
+                        style={{
+                          fontSize: 12.5,
+                          color: palette.textMuted,
+                          paddingVertical: 7,
+                          paddingHorizontal: 12,
+                          textAlign: 'center',
+                          backgroundColor: palette.surface,
+                        }}
+                      >
+                        {alt}
+                      </Text>
+                    ) : null}
                   </View>
                 );
               }

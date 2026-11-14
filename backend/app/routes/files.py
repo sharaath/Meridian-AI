@@ -136,6 +136,25 @@ def download_file(
     )
 
 
+@router.get("/{file_id}/raw")
+def view_file_raw(
+    file_id: str,
+    db: Session = Depends(get_db),
+):
+    """Public stream for rendering images and previewable assets in markdown or presentation slides."""
+    record = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found.")
+    data = storage_service.read_bytes(record.storage_path)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Stored file object not found.")
+    return Response(
+        content=data,
+        media_type=record.mime_type or "image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_file(
     file_id: str,
