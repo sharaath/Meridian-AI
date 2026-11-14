@@ -108,7 +108,7 @@ function CodeBlock({ language, code }: CodeBlockProps) {
 }
 
 function renderInline(text: string, textColor: string, accentColor: string, codeBg: string): React.ReactNode[] {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g);
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|!?\[[^\]]*\]\([^)]+\))/g);
   return parts.map((part, idx) => {
     if (!part) return null;
     if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
@@ -140,6 +140,23 @@ function renderInline(text: string, textColor: string, accentColor: string, code
         </Text>
       );
     }
+    const imgInlineMatch = part.match(/^!\[(.*?)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)$/);
+    if (imgInlineMatch) {
+      let src = imgInlineMatch[2];
+      if (src.startsWith('/')) {
+        const base = process.env.EXPO_PUBLIC_API_URL || 'https://meridian-ai-vvvv.onrender.com';
+        src = `${base}${src}`;
+      }
+      return (
+        <Text
+          key={idx}
+          onPress={() => Linking.openURL(src).catch(() => {})}
+          style={{ color: accentColor, textDecorationLine: 'underline', fontWeight: '600' }}
+        >
+          🖼️ {imgInlineMatch[1] || 'View Image'}
+        </Text>
+      );
+    }
     const linkMatch = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
     if (linkMatch) {
       const [, label, url] = linkMatch;
@@ -160,6 +177,7 @@ function renderInline(text: string, textColor: string, accentColor: string, code
 type Block =
   | { type: 'code'; language: string; content: string }
   | { type: 'table'; headers: string[]; rows: string[][] }
+  | { type: 'image'; alt: string; url: string }
   | { type: 'text'; content: string };
 
 function splitBlocks(markdown: string): Block[] {
@@ -209,11 +227,25 @@ function splitBlocks(markdown: string): Block[] {
       continue;
     }
 
+    // Standalone image block
+    const singleImgMatch = line.trim().match(/^[-*•]?\s*!\[(.*?)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)\s*$/);
+    if (singleImgMatch) {
+      let src = singleImgMatch[2];
+      if (src.startsWith('/')) {
+        const base = process.env.EXPO_PUBLIC_API_URL || 'https://meridian-ai-vvvv.onrender.com';
+        src = `${base}${src}`;
+      }
+      blocks.push({ type: 'image', alt: singleImgMatch[1], url: src });
+      i++;
+      continue;
+    }
+
     const textLines: string[] = [];
     while (
       i < lines.length &&
       !lines[i].trimStart().startsWith('```') &&
-      !(lines[i].includes('|') && i + 1 < lines.length && /^\s*\|?\s*[-:]+[-|\s:]*$/.test(lines[i + 1]))
+      !(lines[i].includes('|') && i + 1 < lines.length && /^\s*\|?\s*[-:]+[-|\s:]*$/.test(lines[i + 1])) &&
+      !lines[i].trim().match(/^[-*•]?\s*!\[(.*?)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)\s*$/)
     ) {
       textLines.push(lines[i]);
       i++;
@@ -245,6 +277,42 @@ export function MarkdownRenderer({
         const isLastBlock = bIdx === blocks.length - 1;
         if (block.type === 'code') {
           return <CodeBlock key={bIdx} language={block.language} code={block.content} />;
+        }
+
+        if (block.type === 'image') {
+          return (
+            <View
+              key={bIdx}
+              style={{
+                marginVertical: 10,
+                borderRadius: 14,
+                overflow: 'hidden',
+                borderWidth: 1,
+                borderColor: palette.border,
+                backgroundColor: palette.surfaceElevated,
+              }}
+            >
+              <Image
+                source={{ uri: block.url }}
+                style={{ width: '100%', height: 260, backgroundColor: palette.surfaceElevated }}
+                resizeMode="cover"
+              />
+              {block.alt ? (
+                <Text
+                  style={{
+                    fontSize: 12.5,
+                    color: palette.textMuted,
+                    paddingVertical: 7,
+                    paddingHorizontal: 12,
+                    textAlign: 'center',
+                    backgroundColor: palette.surface,
+                  }}
+                >
+                  {block.alt}
+                </Text>
+              ) : null}
+            </View>
+          );
         }
 
         if (block.type === 'table') {
@@ -315,6 +383,47 @@ export function MarkdownRenderer({
                 );
               }
               if (/^[-*]\s+/.test(trimmed)) {
+                const bulletImg = trimmed.replace(/^[-*]\s+/, '').match(/^!\[(.*?)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)$/);
+                if (bulletImg) {
+                  let src = bulletImg[2];
+                  if (src.startsWith('/')) {
+                    const base = process.env.EXPO_PUBLIC_API_URL || 'https://meridian-ai-vvvv.onrender.com';
+                    src = `${base}${src}`;
+                  }
+                  return (
+                    <View
+                      key={lIdx}
+                      style={{
+                        marginVertical: 10,
+                        borderRadius: 14,
+                        overflow: 'hidden',
+                        borderWidth: 1,
+                        borderColor: palette.border,
+                        backgroundColor: palette.surfaceElevated,
+                      }}
+                    >
+                      <Image
+                        source={{ uri: src }}
+                        style={{ width: '100%', height: 260, backgroundColor: palette.surfaceElevated }}
+                        resizeMode="cover"
+                      />
+                      {bulletImg[1] ? (
+                        <Text
+                          style={{
+                            fontSize: 12.5,
+                            color: palette.textMuted,
+                            paddingVertical: 7,
+                            paddingHorizontal: 12,
+                            textAlign: 'center',
+                            backgroundColor: palette.surface,
+                          }}
+                        >
+                          {bulletImg[1]}
+                        </Text>
+                      ) : null}
+                    </View>
+                  );
+                }
                 return (
                   <View key={lIdx} style={styles.listItem}>
                     <Text style={{ color: palette.accent, fontWeight: '700', marginRight: 8 }}>•</Text>
@@ -336,7 +445,7 @@ export function MarkdownRenderer({
                 );
               }
 
-              const imgMatch = trimmed.match(/^!\[(.*?)\]\((.*?)\)$/);
+              const imgMatch = trimmed.match(/^[-*•]?\s*!\[(.*?)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)$/);
               if (imgMatch) {
                 const alt = imgMatch[1];
                 let src = imgMatch[2];

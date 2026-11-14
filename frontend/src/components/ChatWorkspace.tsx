@@ -327,7 +327,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
 
     const activeConvId = conv?.id;
     if (activeConvId) {
-      api.cancelStream(activeConvId).catch(() => {});
+      api.cancelStream(activeConvId).catch(() => { });
     }
 
     if (draft) {
@@ -1176,7 +1176,7 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
                           {msg.citations_json.map((cite, cIdx) => (
                             <TouchableOpacity
                               key={cIdx}
-                              onPress={() => cite.url && Linking.openURL(cite.url).catch(() => {})}
+                              onPress={() => cite.url && Linking.openURL(cite.url).catch(() => { })}
                               style={{ marginBottom: 3 }}
                             >
                               <Text numberOfLines={1} style={{ fontSize: 12, color: palette.accent }}>
@@ -1294,8 +1294,10 @@ export function ChatWorkspace({ conversationId }: { conversationId?: string }) {
                           toolStatus.tool === 'web_search'
                             ? 'globe-outline'
                             : toolStatus.tool === 'read_document'
-                            ? 'document-text-outline'
-                            : 'terminal-outline'
+                              ? 'document-text-outline'
+                              : toolStatus.tool === 'generate_image'
+                                ? 'image-outline'
+                                : 'terminal-outline'
                         }
                         size={14}
                         color={palette.accent}

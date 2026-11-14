@@ -37,3 +37,4 @@ def test_oauth_exchange_request_schema():
     req2 = OAuthExchangeRequest(code="sample_code_456", code_verifier="sample_verifier_xyz")
     assert req2.code == "sample_code_456"
     assert req2.code_verifier == "sample_verifier_xyz"
+

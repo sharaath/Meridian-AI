@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Modal,
   Platform,
   ScrollView,
@@ -22,6 +23,8 @@ type PreviewTab = 'artifact' | 'edit' | 'pdf' | 'pptx' | 'docx';
 interface SlideItem {
   title: string;
   bullets: string[];
+  imageUrl?: string;
+  imageAlt?: string;
 }
 
 function stripInlineMd(text: string): string {
@@ -32,26 +35,55 @@ function parseSlidesFromMarkdown(content: string): SlideItem[] {
   const slides: SlideItem[] = [];
   let currentTitle = '';
   let currentBullets: string[] = [];
+  let currentImageUrl: string | undefined = undefined;
+  let currentImageAlt: string | undefined = undefined;
+
+  const pushCurrent = () => {
+    if (currentTitle || currentBullets.length || currentImageUrl) {
+      slides.push({
+        title: currentTitle || `Slide ${slides.length + 1}`,
+        bullets: currentBullets,
+        imageUrl: currentImageUrl,
+        imageAlt: currentImageAlt,
+      });
+      currentTitle = '';
+      currentBullets = [];
+      currentImageUrl = undefined;
+      currentImageAlt = undefined;
+    }
+  };
 
   for (const raw of content.split('\n')) {
     const line = raw.trim();
     if (line === '---' || line === '***' || line === '___') {
-      if (currentTitle || currentBullets.length) {
-        slides.push({ title: currentTitle || `Slide ${slides.length + 1}`, bullets: currentBullets });
-        currentTitle = '';
-        currentBullets = [];
-      }
+      pushCurrent();
       continue;
     }
 
     const slideMatch = line.match(/^(?:\*\*)?Slide\s+\d+\s*[:\-–]\s*(.*?)(?:\*\*)?$/i);
     const headingMatch = line.match(/^#{1,3}\s+(.*)$/);
     if (slideMatch || headingMatch) {
-      if (currentTitle || currentBullets.length) {
-        slides.push({ title: currentTitle || `Slide ${slides.length + 1}`, bullets: currentBullets });
-      }
+      pushCurrent();
       currentTitle = stripInlineMd((slideMatch ? slideMatch[1] : headingMatch?.[1] || '').trim());
-      currentBullets = [];
+      continue;
+    }
+
+    // Detect markdown image tag: ![Caption](url)
+    const imgMatch = line.match(/!\[(.*?)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)/);
+    if (imgMatch) {
+      let src = imgMatch[2];
+      if (src.startsWith('/')) {
+        const base = process.env.EXPO_PUBLIC_API_URL || 'https://meridian-ai-vvvv.onrender.com';
+        src = `${base}${src}`;
+      }
+      if (!currentImageUrl) {
+        currentImageUrl = src;
+        currentImageAlt = imgMatch[1];
+      }
+      const textWithoutImg = line.replace(/[-*•]?\s*!\[.*?\]\([^\s)]+\)/, '').trim();
+      if (textWithoutImg) {
+        currentBullets.push(stripInlineMd(textWithoutImg.replace(/^[-*]\s+/, '• ')));
+      }
       continue;
     }
 
@@ -60,10 +92,7 @@ function parseSlidesFromMarkdown(content: string): SlideItem[] {
     }
   }
 
-  if (currentTitle || currentBullets.length) {
-    slides.push({ title: currentTitle || `Slide ${slides.length + 1}`, bullets: currentBullets });
-  }
-
+  pushCurrent();
   return slides;
 }
 
@@ -564,6 +593,22 @@ export function DocumentPreviewModal({
               <View style={styles.slideTopBar} />
               <ScrollView contentContainerStyle={styles.slideInner}>
                 <Text style={styles.slideTitle}>{activeSlide.title}</Text>
+
+                {activeSlide.imageUrl ? (
+                  <View style={styles.slideImageWrap}>
+                    <Image
+                      source={{ uri: activeSlide.imageUrl }}
+                      style={styles.slideImage}
+                      resizeMode="cover"
+                    />
+                    {activeSlide.imageAlt ? (
+                      <Text style={styles.slideImageCaption}>
+                        {activeSlide.imageAlt}
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
+
                 <View style={{ gap: 8, marginTop: 14 }}>
                   {activeSlide.bullets.map((b, i) => (
                     <Text key={i} style={styles.slideBullet}>
@@ -728,6 +773,30 @@ const styles = StyleSheet.create({
   slideTopBar: { height: 10, width: '100%', backgroundColor: '#0D9488' },
   slideInner: { padding: 24 },
   slideTitle: { fontSize: 22, fontWeight: '800', color: '#0F172A' },
+  slideImageWrap: {
+    marginTop: 14,
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#0F172A',
+  },
+  slideImage: {
+    width: '100%',
+    height: 220,
+    backgroundColor: '#0F172A',
+  },
+  slideImageCaption: {
+    fontSize: 12,
+    color: '#64748B',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    textAlign: 'center',
+    backgroundColor: '#F8FAFC',
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+    fontStyle: 'italic',
+  },
   slideBullet: { fontSize: 15, lineHeight: 22, color: '#1E293B' },
   slideControls: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   navArrow: {
