@@ -54,5 +54,6 @@ class AuthResponse(BaseModel):
 
 class OAuthExchangeRequest(BaseModel):
     code: str = Field(..., min_length=1)
+    code_verifier: Optional[str] = None
 
 

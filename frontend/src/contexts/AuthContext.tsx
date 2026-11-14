@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api, setApiToken } from '@/services/api';
 import { UserSummary } from '@/types/api';
+import { clearStoredPkceVerifier, getStoredPkceVerifier } from '@/utils/pkce';
 
 const TOKEN_STORAGE_KEY = 'meridian_auth_token';
 
@@ -52,11 +53,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const code = params.get('code');
             if (code) {
               try {
-                const exchange = await api.exchangeOAuthCode(code);
+                const verifier = getStoredPkceVerifier();
+                const exchange = await api.exchangeOAuthCode(code, verifier || undefined);
                 activeToken = exchange.access_token;
                 incomingUser = exchange.user;
               } catch (exchangeErr) {
                 console.warn('OAuth code exchange failed:', exchangeErr);
+              } finally {
+                clearStoredPkceVerifier();
               }
               window.history.replaceState(null, '', window.location.pathname);
             }

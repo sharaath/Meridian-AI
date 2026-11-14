@@ -269,12 +269,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ token, new_password }),
     }),
-  googleOAuthUrl: (redirectTo: string) =>
-    request<{ url: string }>(`/api/auth/oauth/google?redirect_to=${encodeURIComponent(redirectTo)}`),
-  exchangeOAuthCode: (code: string) =>
+  googleOAuthUrl: (redirectTo: string, codeChallenge?: string) =>
+    request<{ url: string }>(
+      `/api/auth/oauth/google?redirect_to=${encodeURIComponent(redirectTo)}${
+        codeChallenge ? `&code_challenge=${encodeURIComponent(codeChallenge)}` : ''
+      }`
+    ),
+  exchangeOAuthCode: (code: string, codeVerifier?: string) =>
     request<AuthResponse>('/api/auth/oauth/exchange', {
       method: 'POST',
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, code_verifier: codeVerifier || undefined }),
     }),
 
   // Models

@@ -289,15 +289,19 @@ def confirm_password_reset(payload: PasswordResetConfirmRequest, db: Session = D
 
 
 @router.get("/oauth/google")
-def google_oauth_url(redirect_to: str = "http://localhost:8081/login"):
+def google_oauth_url(
+    redirect_to: str = "http://localhost:8081/login",
+    code_challenge: Optional[str] = None,
+):
     settings = get_settings()
     if not settings.is_supabase_auth_configured:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Google Sign-In requires Supabase Auth configuration (SUPABASE_URL and SUPABASE_ANON_KEY).",
         )
-    # Direct authorize URL for implicit token grant (returns JWT in URL hash without PKCE code verifier mismatch)
     url = f"{settings.supabase_url}/auth/v1/authorize?provider=google&redirect_to={quote_plus(redirect_to)}"
+    if code_challenge:
+        url += f"&code_challenge={quote_plus(code_challenge)}&code_challenge_method=s256"
     return {"url": url}
 
 
@@ -310,41 +314,89 @@ def exchange_oauth_code(payload: OAuthExchangeRequest, db: Session = Depends(get
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Google Sign-In requires Supabase Auth configuration (SUPABASE_URL and SUPABASE_ANON_KEY).",
         )
+
+    session_token = None
+    user_id = None
+    user_email = None
+    user_metadata = {}
+    confirmed_at = True
+
+    # Attempt 1: Try using the supabase python client
     try:
         from supabase import create_client
 
         client = create_client(settings.supabase_url, settings.supabase_anon_key)
-        resp = client.auth.exchange_code_for_session({"auth_code": payload.code})
-        if not resp.session or not resp.user:
-            raise HTTPException(status_code=400, detail="Failed to exchange OAuth code for user session.")
+        exchange_dict = {"auth_code": payload.code}
+        if payload.code_verifier:
+            exchange_dict["code_verifier"] = payload.code_verifier
+        resp = client.auth.exchange_code_for_session(exchange_dict)
+        if resp.session and resp.user:
+            session_token = resp.session.access_token
+            user_id = str(resp.user.id)
+            user_email = (resp.user.email or f"{user_id}@users.local").lower()
+            user_metadata = getattr(resp.user, "user_metadata", {}) or {}
+            confirmed_at = bool(getattr(resp.user, "email_confirmed_at", True))
+    except Exception as client_err:
+        # Attempt 2: Fallback to direct HTTP POST to Supabase Auth token endpoint
+        try:
+            import httpx
 
-        email = (resp.user.email or f"{resp.user.id}@users.local").lower()
-        user = db.query(User).filter(User.id == str(resp.user.id)).first()
-        if not user:
-            user = db.query(User).filter(User.email == email).first()
-
-        if not user:
-            username = (resp.user.user_metadata or {}).get("username") or email.split("@")[0]
-            user = User(
-                id=str(resp.user.id),
-                email=email,
-                username=username,
-                password_hash="",
-                email_verified=bool(getattr(resp.user, "email_confirmed_at", True)),
+            token_endpoint = f"{settings.supabase_url}/auth/v1/token?grant_type=pkce"
+            req_body = {"auth_code": payload.code}
+            if payload.code_verifier:
+                req_body["code_verifier"] = payload.code_verifier
+            r = httpx.post(
+                token_endpoint,
+                headers={"apikey": settings.supabase_anon_key, "Content-Type": "application/json"},
+                json=req_body,
+                timeout=10.0,
             )
-            db.add(user)
-            db.flush()
-            db.add(UserPreference(user_id=user.id))
-            db.commit()
-            db.refresh(user)
+            if r.status_code == 200:
+                data = r.json()
+                session_token = data.get("access_token")
+                raw_user = data.get("user") or {}
+                user_id = str(raw_user.get("id"))
+                user_email = (raw_user.get("email") or f"{user_id}@users.local").lower()
+                user_metadata = raw_user.get("user_metadata") or {}
+                confirmed_at = bool(raw_user.get("email_confirmed_at", True))
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"OAuth exchange failed: {r.text} (client err: {client_err})",
+                )
+        except HTTPException:
+            raise
+        except Exception as http_err:
+            raise HTTPException(
+                status_code=400,
+                detail=f"OAuth exchange failed: {http_err} (client err: {client_err})",
+            )
 
-        return AuthResponse(
-            access_token=resp.session.access_token,
-            auth_provider="supabase",
-            user=UserSummary.model_validate(user),
+    if not session_token or not user_id:
+        raise HTTPException(status_code=400, detail="Failed to exchange OAuth code for user session.")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        user = db.query(User).filter(User.email == user_email).first()
+
+    if not user:
+        username = user_metadata.get("username") or user_metadata.get("name") or user_email.split("@")[0]
+        user = User(
+            id=user_id,
+            email=user_email,
+            username=username,
+            password_hash="",
+            email_verified=confirmed_at,
         )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"OAuth exchange failed: {exc}")
+        db.add(user)
+        db.flush()
+        db.add(UserPreference(user_id=user.id))
+        db.commit()
+        db.refresh(user)
+
+    return AuthResponse(
+        access_token=session_token,
+        auth_provider="supabase",
+        user=UserSummary.model_validate(user),
+    )
 

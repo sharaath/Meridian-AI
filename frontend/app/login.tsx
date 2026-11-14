@@ -16,6 +16,7 @@ import { MeridianLogo } from '@/components/MeridianLogo';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { api } from '@/services/api';
+import { createAndStorePkce } from '@/utils/pkce';
 
 export default function LoginPage() {
   const { palette } = useTheme();
@@ -57,16 +58,13 @@ export default function LoginPage() {
     try {
       const redirectTo =
         Platform.OS === 'web' && typeof window !== 'undefined' ? `${window.location.origin}/login` : 'meridian://chat';
-      const { url } = await api.googleOAuthUrl(redirectTo);
+      const { challenge } = await createAndStorePkce();
+      const { url } = await api.googleOAuthUrl(redirectTo, challenge);
       if (url) {
-        // Strip code_challenge so Supabase uses direct token grant in URL hash without PKCE mismatch
-        const cleanUrl = url
-          .replace(/&code_challenge=[^&]+/, '')
-          .replace(/&code_challenge_method=[^&]+/, '');
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.location.assign(cleanUrl);
+          window.location.assign(url);
         } else {
-          await Linking.openURL(cleanUrl);
+          await Linking.openURL(url);
         }
       }
     } catch (err: any) {
