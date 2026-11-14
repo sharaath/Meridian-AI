@@ -20,11 +20,21 @@ import { DiffChunk, EditChecklistItem, Message, PreciseEditResponse, VersionHist
 
 type PreviewTab = 'artifact' | 'edit' | 'pdf' | 'pptx' | 'docx';
 
+interface SlideCardItem {
+  icon?: string;
+  label: string;
+  text: string;
+}
+
 interface SlideItem {
   title: string;
-  bullets: string[];
+  subtitle?: string;
   imageUrl?: string;
   imageAlt?: string;
+  sectionHeader?: string;
+  cards: SlideCardItem[];
+  bullets: string[];
+  footer?: string;
 }
 
 function stripInlineMd(text: string): string {
@@ -34,22 +44,34 @@ function stripInlineMd(text: string): string {
 function parseSlidesFromMarkdown(content: string): SlideItem[] {
   const slides: SlideItem[] = [];
   let currentTitle = '';
+  let currentSubtitle: string | undefined = undefined;
+  let currentSectionHeader: string | undefined = undefined;
+  let currentCards: SlideCardItem[] = [];
   let currentBullets: string[] = [];
   let currentImageUrl: string | undefined = undefined;
   let currentImageAlt: string | undefined = undefined;
+  let currentFooter: string | undefined = undefined;
 
   const pushCurrent = () => {
-    if (currentTitle || currentBullets.length || currentImageUrl) {
+    if (currentTitle || currentBullets.length || currentCards.length || currentImageUrl) {
       slides.push({
         title: currentTitle || `Slide ${slides.length + 1}`,
+        subtitle: currentSubtitle,
+        sectionHeader: currentSectionHeader,
+        cards: currentCards,
         bullets: currentBullets,
         imageUrl: currentImageUrl,
         imageAlt: currentImageAlt,
+        footer: currentFooter,
       });
       currentTitle = '';
+      currentSubtitle = undefined;
+      currentSectionHeader = undefined;
+      currentCards = [];
       currentBullets = [];
       currentImageUrl = undefined;
       currentImageAlt = undefined;
+      currentFooter = undefined;
     }
   };
 
@@ -61,10 +83,17 @@ function parseSlidesFromMarkdown(content: string): SlideItem[] {
     }
 
     const slideMatch = line.match(/^(?:\*\*)?Slide\s+\d+\s*[:\-–]\s*(.*?)(?:\*\*)?$/i);
-    const headingMatch = line.match(/^#{1,3}\s+(.*)$/);
-    if (slideMatch || headingMatch) {
+    const heading1or2Match = line.match(/^#{1,2}\s+(.*)$/);
+    if (slideMatch || heading1or2Match) {
       pushCurrent();
-      currentTitle = stripInlineMd((slideMatch ? slideMatch[1] : headingMatch?.[1] || '').trim());
+      currentTitle = stripInlineMd((slideMatch ? slideMatch[1] : heading1or2Match?.[1] || '').trim());
+      continue;
+    }
+
+    // Section Header (### Heading)
+    const h3Match = line.match(/^#{3}\s+(.*)$/);
+    if (h3Match) {
+      currentSectionHeader = stripInlineMd(h3Match[1].trim());
       continue;
     }
 
@@ -87,8 +116,46 @@ function parseSlidesFromMarkdown(content: string): SlideItem[] {
       continue;
     }
 
+    // Subtitle detection: italic line right below title, before bullets/cards
+    if (
+      currentTitle &&
+      !currentSubtitle &&
+      !currentCards.length &&
+      !currentBullets.length &&
+      /^[*_]([^*_]+)[*_]$/.test(line)
+    ) {
+      const subMatch = line.match(/^[*_]([^*_]+)[*_]$/);
+      if (subMatch) {
+        currentSubtitle = subMatch[1].trim();
+        continue;
+      }
+    }
+
+    // Footer citation / source detection: e.g. *Source: ...* or *U.S. federal definition*
+    if (/^\*(?:Source|Reference|Note)?:?\s*([^*]+)\*$/i.test(line)) {
+      const footMatch = line.match(/^\*(?:Source|Reference|Note)?:?\s*([^*]+)\*$/i);
+      if (footMatch) {
+        currentFooter = footMatch[1].trim();
+        continue;
+      }
+    }
+
+    // Concept Card vs regular bullet detection
     if (line) {
-      currentBullets.push(stripInlineMd(line.replace(/^[-*]\s+/, '• ')));
+      const cleaned = line.replace(/^[-*•]\s+/, '').trim();
+      // Match card structure: optional emoji, label/keyword, colon/dash, description
+      const cardMatch = cleaned.match(
+        /^(?:([☀️⚡🌬️💨🌊♨️🌋♻️🔋💡🌱🌍🍃🪵💻⚙️🏭🏗️🔌🔬🏢🚗✈️🚢🛳️])\s*)?(?:\*\*)?([^:*–]+?)(?:\*\*)?\s*[:\-–]\s+(.*)$/
+      );
+      if (cardMatch && cardMatch[2].length <= 35 && cardMatch[3].length > 3) {
+        currentCards.push({
+          icon: cardMatch[1] || undefined,
+          label: cardMatch[2].trim(),
+          text: stripInlineMd(cardMatch[3].trim()),
+        });
+      } else {
+        currentBullets.push(stripInlineMd(line.replace(/^[-*]\s+/, '• ')));
+      }
     }
   }
 
@@ -591,30 +658,75 @@ export function DocumentPreviewModal({
           <View style={styles.slideStage}>
             <View style={styles.slideCard}>
               <View style={styles.slideTopBar} />
-              <ScrollView contentContainerStyle={styles.slideInner}>
-                <Text style={styles.slideTitle}>{activeSlide.title}</Text>
+              <ScrollView contentContainerStyle={styles.slideInnerScroll}>
+                <View style={styles.slideContentLayout}>
+                  {/* Left Column: Hero Graphic Illustration (if present) */}
+                  {activeSlide.imageUrl ? (
+                    <View style={styles.slideHeroCol}>
+                      <Image
+                        source={{ uri: activeSlide.imageUrl }}
+                        style={styles.slideHeroImage}
+                        resizeMode="cover"
+                      />
+                      {activeSlide.imageAlt ? (
+                        <View style={styles.slideHeroOverlay}>
+                          <Text numberOfLines={2} style={styles.slideHeroCaption}>
+                            {activeSlide.imageAlt}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : null}
 
-                {activeSlide.imageUrl ? (
-                  <View style={styles.slideImageWrap}>
-                    <Image
-                      source={{ uri: activeSlide.imageUrl }}
-                      style={styles.slideImage}
-                      resizeMode="cover"
-                    />
-                    {activeSlide.imageAlt ? (
-                      <Text style={styles.slideImageCaption}>
-                        {activeSlide.imageAlt}
-                      </Text>
+                  {/* Right Column: Title, Subtitle, Section Header, Cards & Bullets */}
+                  <View style={[styles.slideDeckCol, !activeSlide.imageUrl && { width: '100%', maxWidth: '100%' }]}>
+                    <View style={styles.slideDeckHeader}>
+                      <View style={styles.slideBadge}>
+                        <Text style={styles.slideBadgeText}>SLIDE {slideIndex + 1} OF {slides.length}</Text>
+                      </View>
+                      <Text style={styles.slideTitle}>{activeSlide.title}</Text>
+                      {activeSlide.subtitle ? (
+                        <Text style={styles.slideSubtitle}>{activeSlide.subtitle}</Text>
+                      ) : null}
+                    </View>
+
+                    {activeSlide.sectionHeader ? (
+                      <Text style={styles.slideSectionHeader}>{activeSlide.sectionHeader}</Text>
+                    ) : null}
+
+                    {/* Structured Concept Cards */}
+                    {activeSlide.cards.length > 0 ? (
+                      <View style={styles.slideCardsContainer}>
+                        {activeSlide.cards.map((card, cIdx) => (
+                          <View key={cIdx} style={styles.slideConceptCard}>
+                            <View style={styles.cardIconBadge}>
+                              <Text style={styles.cardIconText}>{card.icon || '⚡'}</Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.cardLabelText}>{card.label}</Text>
+                              <Text style={styles.cardDescText}>{card.text}</Text>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+
+                    {/* Standard Bullets if any */}
+                    {activeSlide.bullets.length > 0 ? (
+                      <View style={{ gap: 8, marginTop: 8 }}>
+                        {activeSlide.bullets.map((b, i) => (
+                          <Text key={i} style={styles.slideBullet}>
+                            {b}
+                          </Text>
+                        ))}
+                      </View>
+                    ) : null}
+
+                    {/* Footer / Citation */}
+                    {activeSlide.footer ? (
+                      <Text style={styles.slideFooterText}>{activeSlide.footer}</Text>
                     ) : null}
                   </View>
-                ) : null}
-
-                <View style={{ gap: 8, marginTop: 14 }}>
-                  {activeSlide.bullets.map((b, i) => (
-                    <Text key={i} style={styles.slideBullet}>
-                      {b}
-                    </Text>
-                  ))}
                 </View>
               </ScrollView>
             </View>
@@ -770,34 +882,93 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
     overflow: 'hidden',
   },
-  slideTopBar: { height: 10, width: '100%', backgroundColor: '#0D9488' },
-  slideInner: { padding: 24 },
-  slideTitle: { fontSize: 22, fontWeight: '800', color: '#0F172A' },
-  slideImageWrap: {
-    marginTop: 14,
-    borderRadius: 10,
+  slideTopBar: { height: 8, width: '100%', backgroundColor: '#0D9488' },
+  slideInnerScroll: { padding: 20 },
+  slideContentLayout: {
+    flexDirection: Platform.OS === 'web' ? 'row' : 'column',
+    gap: 20,
+    alignItems: 'stretch',
+  },
+  slideHeroCol: {
+    width: Platform.OS === 'web' ? 260 : '100%',
+    minHeight: 280,
+    borderRadius: 12,
     overflow: 'hidden',
+    backgroundColor: '#0F172A',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    position: 'relative',
+  },
+  slideHeroImage: {
+    width: '100%',
+    height: '100%',
+    minHeight: 280,
+  },
+  slideHeroOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  slideHeroCaption: {
+    fontSize: 11,
+    color: '#E2E8F0',
+    fontStyle: 'italic',
+    textAlign: 'center',
+  },
+  slideDeckCol: {
+    flex: 1,
+    gap: 10,
+  },
+  slideDeckHeader: {
+    gap: 4,
+  },
+  slideBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(13, 148, 136, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 4,
+  },
+  slideBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#0D9488',
+    letterSpacing: 0.8,
+  },
+  slideTitle: { fontSize: 20, fontWeight: '800', color: '#0F172A', lineHeight: 26 },
+  slideSubtitle: { fontSize: 13, fontStyle: 'italic', color: '#475569', lineHeight: 18 },
+  slideSectionHeader: { fontSize: 14, fontWeight: '700', color: '#0F172A', marginTop: 4 },
+  slideCardsContainer: { gap: 8, marginTop: 4 },
+  slideConceptCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    backgroundColor: '#0F172A',
+    borderRadius: 8,
+    padding: 9,
   },
-  slideImage: {
-    width: '100%',
-    height: 220,
-    backgroundColor: '#0F172A',
+  cardIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 6,
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  slideImageCaption: {
-    fontSize: 12,
-    color: '#64748B',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    textAlign: 'center',
-    backgroundColor: '#F8FAFC',
-    borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
-    fontStyle: 'italic',
-  },
-  slideBullet: { fontSize: 15, lineHeight: 22, color: '#1E293B' },
+  cardIconText: { fontSize: 16 },
+  cardLabelText: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  cardDescText: { fontSize: 12, color: '#334155', lineHeight: 17, marginTop: 2 },
+  slideFooterText: { fontSize: 11, color: '#64748B', fontStyle: 'italic', marginTop: 6 },
+  slideBullet: { fontSize: 13.5, lineHeight: 20, color: '#1E293B' },
   slideControls: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   navArrow: {
     flexDirection: 'row',

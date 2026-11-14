@@ -485,19 +485,38 @@ def export_message_pptx(
                     f'<p:pic><p:nvPicPr><p:cNvPr id="{10 + idx}" name="SlidePicture{idx}"/>'
                     '<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
                     '<p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>'
-                    '<p:spPr><a:xfrm><a:off x="6400000" y="1650000"/><a:ext cx="5100000" cy="4500000"/></a:xfrm>'
+                    '<p:spPr><a:xfrm><a:off x="685800" y="1650000"/><a:ext cx="4600000" cy="4650000"/></a:xfrm>'
                     '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
                 )
 
-            # Two-column layout if image present, full width if text only
-            content_cx = "5300000" if pic_xml else "10820400"
+            # Two-column layout if image present (Hero Graphic on left, Content Deck on right)
+            content_x = "5500000" if pic_xml else "685800"
+            content_cx = "6000000" if pic_xml else "10820400"
 
-            body_paragraphs = "".join(
-                "<a:p><a:pPr marL=\"0\" indent=\"0\"><a:spcAft><a:spcPts val=\"800\"/></a:spcAft></a:pPr>"
-                f"<a:r><a:rPr lang=\"en-US\" sz=\"1800\" dirty=\"0\"><a:solidFill><a:srgbClr val=\"1E293B\"/></a:solidFill></a:rPr>"
-                f"<a:t>{escape(b)}</a:t></a:r></a:p>"
-                for b in (s_bullets[:14] or [""])
-            )
+            paragraphs_xml = []
+            for b in (s_bullets[:14] or [""]):
+                b_str = b.strip()
+                card_split = re.match(
+                    r"^(?:[•\-\*]\s*)?([☀️⚡🌬️💨🌊♨️🌋♻️🔋💡🌱🌍🍃🪵💻⚙️🏭🏗️🔌🔬🏢🚗✈️🚢🛳️]?\s*[^:\-–]+?)\s*[:\-–]\s+(.*)$",
+                    b_str,
+                )
+                if card_split and len(card_split.group(1)) <= 35:
+                    label = card_split.group(1).strip()
+                    desc = card_split.group(2).strip()
+                    paragraphs_xml.append(
+                        '<a:p><a:pPr marL="0" indent="0"><a:spcAft><a:spcPts val="600"/></a:spcAft></a:pPr>'
+                        f'<a:r><a:rPr lang="en-US" sz="1700" b="1"><a:solidFill><a:srgbClr val="0F172A"/></a:solidFill></a:rPr>'
+                        f'<a:t>{escape(label)}: </a:t></a:r>'
+                        f'<a:r><a:rPr lang="en-US" sz="1500"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:rPr>'
+                        f'<a:t>{escape(desc)}</a:t></a:r></a:p>'
+                    )
+                else:
+                    paragraphs_xml.append(
+                        '<a:p><a:pPr marL="0" indent="0"><a:spcAft><a:spcPts val="600"/></a:spcAft></a:pPr>'
+                        f'<a:r><a:rPr lang="en-US" sz="1600" dirty="0"><a:solidFill><a:srgbClr val="1E293B"/></a:solidFill></a:rPr>'
+                        f'<a:t>{escape(b_str)}</a:t></a:r></a:p>'
+                    )
+            body_paragraphs = "".join(paragraphs_xml)
 
             slide_xml = (
                 '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -525,7 +544,7 @@ def export_message_pptx(
                 # Body box
                 "<p:sp><p:nvSpPr><p:cNvPr id=\"4\" name=\"Content\"/><p:cNvSpPr><a:spLocks noGrp=\"1\"/></p:cNvSpPr>"
                 "<p:nvPr><p:ph idx=\"1\"/></p:nvPr></p:nvSpPr>"
-                f"<p:spPr><a:xfrm><a:off x=\"685800\" y=\"1650000\"/><a:ext cx=\"{content_cx}\" cy=\"4650000\"/></a:xfrm>"
+                f"<p:spPr><a:xfrm><a:off x=\"{content_x}\" y=\"1650000\"/><a:ext cx=\"{content_cx}\" cy=\"4650000\"/></a:xfrm>"
                 "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr>"
                 f"<p:txBody><a:bodyPr wrap=\"square\"/><a:lstStyle/>{body_paragraphs}</p:txBody></p:sp>"
                 f"{pic_xml}"
