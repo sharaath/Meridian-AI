@@ -59,22 +59,8 @@ export default function LoginPage() {
       const redirectTo =
         Platform.OS === 'web' && typeof window !== 'undefined' ? `${window.location.origin}/login` : 'meridian://chat';
 
-      // Direct authorize URL without code_challenge ensures Supabase returns the session token
-      // in the URL hash (#access_token=...), completely avoiding PKCE code verifier mismatches.
-      let targetUrl = `https://ocqnzkjcffaicqhymwvm.supabase.co/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}`;
-      try {
-        const res = await api.googleOAuthUrl(redirectTo);
-        if (res && res.url) {
-          const parsed = new URL(res.url);
-          parsed.searchParams.delete('code_challenge');
-          parsed.searchParams.delete('code_challenge_method');
-          parsed.searchParams.set('provider', 'google');
-          parsed.searchParams.set('redirect_to', redirectTo);
-          targetUrl = parsed.toString();
-        }
-      } catch {
-        // Fallback to direct Supabase authorization endpoint
-      }
+      // Direct Supabase authorize URL for implicit grant (returns token in URL hash without PKCE code verifier requirement)
+      const targetUrl = `https://ocqnzkjcffaicqhymwvm.supabase.co/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}`;
 
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.location.assign(targetUrl);

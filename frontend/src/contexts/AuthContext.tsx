@@ -51,10 +51,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           } else if (search.includes('code=')) {
             const params = new URLSearchParams(search.replace(/^\?/, ''));
             const code = params.get('code');
-            if (code) {
+            const verifier = getStoredPkceVerifier();
+            if (code && verifier) {
               try {
-                const verifier = getStoredPkceVerifier();
-                const exchange = await api.exchangeOAuthCode(code, verifier || undefined);
+                const exchange = await api.exchangeOAuthCode(code, verifier);
                 activeToken = exchange.access_token;
                 incomingUser = exchange.user;
               } catch (exchangeErr) {
@@ -62,8 +62,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               } finally {
                 clearStoredPkceVerifier();
               }
-              window.history.replaceState(null, '', window.location.pathname);
             }
+            window.history.replaceState(null, '', window.location.pathname);
           }
 
           if (activeToken) {
