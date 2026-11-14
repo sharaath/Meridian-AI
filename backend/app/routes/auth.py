@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
@@ -295,14 +296,9 @@ def google_oauth_url(redirect_to: str = "http://localhost:8081/login"):
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Google Sign-In requires Supabase Auth configuration (SUPABASE_URL and SUPABASE_ANON_KEY).",
         )
-    try:
-        from supabase import create_client
-
-        client = create_client(settings.supabase_url, settings.supabase_anon_key)
-        res = client.auth.sign_in_with_oauth({"provider": "google", "options": {"redirect_to": redirect_to}})
-        return {"url": res.url}
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to initialize Google OAuth: {exc}")
+    # Direct authorize URL for implicit token grant (returns JWT in URL hash without PKCE code verifier mismatch)
+    url = f"{settings.supabase_url}/auth/v1/authorize?provider=google&redirect_to={quote_plus(redirect_to)}"
+    return {"url": url}
 
 
 @router.post("/oauth/exchange", response_model=AuthResponse)
